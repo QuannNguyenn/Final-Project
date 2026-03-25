@@ -1,0 +1,256 @@
+import pyodbc
+import pandas as pd
+import numpy as np
+
+server = r'QUAN-CORNER\SQLEXPRESS01'
+
+conn = pyodbc.connect(
+    f'DRIVER={{ODBC Driver 17 for SQL Server}};SERVER={server};DATABASE={'dwh'};Trusted_Connection=yes;'
+)
+
+cursor = conn.cursor()
+
+# importing as pandas df from sql server
+cards_data_df = pd.read_sql(
+    "SELECT * FROM dbo.cards_data"
+    , conn)
+
+# Looking for null in the table
+null_rows = cards_data_df[cards_data_df.isnull().any(axis=1)]
+print(null_rows.isnull().sum()[null_rows.isnull().sum() > 0]) 
+## 2 columns cards_brand and card_type have null values
+
+# Only card_brand and card_type have null values, replace null values with "Not Available"
+cards_data_df["card_brand"] = cards_data_df["card_brand"].fillna("Not Available")
+cards_data_df["card_type"] = cards_data_df["card_type"].fillna("Not Available")
+
+# Check again
+null_rows = cards_data_df[cards_data_df.isnull().any(axis=1)]
+print(null_rows.isnull().sum()[null_rows.isnull().sum() > 0]) 
+
+# Checking for inconsistency in formatting for text columns
+cards_data_df["card_brand"].unique()
+cards_data_df["card_type"].unique()
+cards_data_df["has_chip"].unique()
+cards_data_df["year_pin_last_changed"].unique()
+cards_data_df["card_on_dark_web"].unique()
+cards_data_df["issuer_bank_name"].unique()
+cards_data_df["issuer_bank_state"].unique()
+cards_data_df["issuer_bank_type"].unique()
+cards_data_df["issuer_risk_rating"].unique()
+
+## Columns that are found to have inconsistent formating are: card_brand, card_type, issuer_bank_name, issuer_bank_state, issuer_bank_type, and issuer_risk_rating
+
+# Cleaning the naming scheme of inconsistent columns
+## card_brand
+def clean_card_brand(col):
+    col = col.astype(str).str.strip().str.lower()
+
+    return col.replace({
+        # VISA
+        r"^v$": "Visa",
+        r"^visa.*": "Visa",
+        r"^vissa.*": "Visa",
+        r"^vvisa.*": "Visa",
+        r"^vis$": "Visa",
+        r"^v!sa.*": "Visa",
+        r"^visa-card.*": "Visa",
+
+        # MASTERCARD
+        r"^master.*card.*": "Mastercard",
+        r"^mastercard.*": "Mastercard",
+        r"^master card.*": "Mastercard",
+        r"^master\s+card.*": "Mastercard",
+
+        # AMEX
+        r"^amex.*": "Amex",
+        r"^ame\s*x.*": "Amex",
+
+        # DISCOVER
+        r"^discover.*": "Discover",
+        r"^dis\s*cover.*": "Discover",
+
+        # UNKNOWN → Not Available
+        r"^unknown$": "Not Available",
+        r"^not available$": "Not Available"
+    }, regex=True)
+
+cards_data_df["card_brand"] = clean_card_brand(cards_data_df["card_brand"])
+
+cards_data_df["card_brand"].unique()
+
+## card_type
+def clean_card_type(col):
+    col = col.astype(str).str.strip().str.lower()
+
+    return col.replace({
+        # CREDIT 
+        r"^credit.*": "Credit",
+        r"^cr.*": "Credit",
+        r"^cc$": "Credit",
+        r".*credit.*": "Credit",
+
+        # PREPAID
+        r".*pre\s*paid.*": "Prepaid",
+        r".*prepaid.*": "Prepaid",
+        r".*prepiad.*": "Prepaid",
+        r"^ppd$": "Prepaid",
+        r"^dpp$": "Prepaid",
+        r"^db-pp$": "Prepaid",
+        r"^dp$": "Prepaid",
+
+        # DEBIT
+        r"^debit.*": "Debit",
+        r"^deb.*": "Debit",
+        r"^db$": "Debit",
+        r"^d$": "Debit",
+        r".*debit.*": "Debit",
+        r".*bank debit.*": "Debit",
+
+        # UNKNOWN
+        r"^unknown$": "Not Available",
+        r"^not available$": "Not Available"
+    }, regex=True)
+
+cards_data_df["card_type"] = clean_card_type(cards_data_df["card_type"])
+
+cards_data_df["card_brand"].unique()
+
+## issuer_bank_name
+def clean_bank_name(col):
+    col = col.astype(str).str.strip().str.lower()
+
+    return col.replace({
+        # --- WELLS FARGO ---
+        r".*wells\s*fargo.*": "Wells Fargo",
+
+        # --- CITI ---
+        r"^citi.*": "Citi",
+
+        # --- CHASE ---
+        r".*jpmorgan\s*chase.*": "Chase",
+        r".*jp\s*morgan\s*chase.*": "Chase",
+        r".*chase.*": "Chase",
+
+        # --- BANK OF AMERICA ---
+        r".*bank\s*of\s*america.*": "Bank of America",
+        r".*bk\s*of\s*america.*": "Bank of America",
+
+        # --- CAPITAL ONE ---
+        r".*capital\s*one.*": "Capital One",
+
+        # --- U.S. BANK ---
+        r".*u\.?s\.?\s*bank.*": "U.S. Bank",
+        r".*u\.?s\.?\s*bk.*": "U.S. Bank",
+
+        # --- DISCOVER ---
+        r".*discover.*": "Discover",
+
+        # --- PNC ---
+        r".*pnc.*": "PNC",
+
+        # --- ALLY ---
+        r".*ally.*": "Ally",
+
+        # --- TRUIST ---
+        r".*truist.*": "Truist",
+
+        # --- UNKNOWN ---
+        r"^unknown$": "Not Available",
+        r"^not available$": "Not Available"
+    }, regex=True)
+
+cards_data_df["issuer_bank_name"] = clean_bank_name(cards_data_df["issuer_bank_name"])
+
+cards_data_df["issuer_bank_name"].unique()
+
+## Isssuer_bank_state
+def clean_state(col):
+    col = col.astype(str).str.strip().str.lower()
+
+    return col.replace({
+        # --- CALIFORNIA ---
+        r"^california$": "CA",
+        r"^ca$": "CA",
+
+        # --- NEW YORK ---
+        r"^new york$": "NY",
+        r"^ny$": "NY",
+
+        # --- NORTH CAROLINA ---
+        r"^north carolina$": "NC",
+        r"^nc$": "NC",
+
+        # --- VIRGINIA ---
+        r"^virginia$": "VA",
+        r"^va$": "VA",
+
+        # --- MINNESOTA ---
+        r"^minnesota$": "MN",
+        r"^mn$": "MN",
+
+        # --- ILLINOIS ---
+        r"^illinois$": "IL",
+        r"^il$": "IL",
+
+        # --- PENNSYLVANIA ---
+        r"^pennsylvania$": "PA",
+        r"^pa$": "PA",
+
+        # --- MICHIGAN ---
+        r"^michigan$": "MI",
+        r"^mi$": "MI"
+    }, regex=True)
+
+cards_data_df["issuer_bank_state"] = clean_state(cards_data_df["issuer_bank_state"])
+
+cards_data_df["issuer_bank_state"].unique()
+
+## Issuer bank type
+def clean_bank_type(col):
+    col = col.astype(str).str.strip().str.lower()
+
+    return col.replace({
+        # --- NATIONAL ---
+        r".*national.*": "National",
+
+        # --- REGIONAL ---
+        r".*regional.*": "Regional",
+
+        # --- ONLINE ---
+        r".*online.*": "Online",
+
+        # --- UNKNOWN (optional) ---
+        r"^unknown$": "Not Available",
+        r"^not available$": "Not Available"
+    }, regex=True)
+
+cards_data_df["issuer_bank_type"] = clean_bank_type(cards_data_df["issuer_bank_type"])
+
+cards_data_df["issuer_bank_type"].unique()
+
+
+# Fixing numeric columns
+bad_rows = cards_data_df[
+    ~cards_data_df["card_number"].str.endswith(".0", na=False)
+]
+
+valid_16 = cards_data_df[
+    cards_data_df["card_number"]
+    .astype(str)
+    .str.replace(r"\.\d+$", "", regex=True)  # remove decimal part
+    .str.len() == 16
+]
+
+print(valid_16)
+
+invalid = cards_data_df[
+    cards_data_df["card_number"]
+    .astype(str)
+    .str.replace(r"\.\d+$", "", regex=True)
+    .str.len() != 16
+]
+
+print(invalid)
+
+print(bad_rows)
