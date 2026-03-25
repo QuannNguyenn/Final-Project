@@ -1,0 +1,257 @@
+import pyodbc
+import pandas as pd
+import numpy as np
+
+
+server = r'QUAN-CORNER\SQLEXPRESS01'
+
+# Creating the data warehouse
+connection = pyodbc.connect(
+    'DRIVER={ODBC Driver 17 for SQL Server};'
+    f'SERVER={server};'
+    'DATABASE=master;'
+    'Trusted_Connection=yes;',
+    autocommit=True 
+)
+
+cursor = connection.cursor()
+
+# Create database
+cursor.execute("CREATE DATABASE dwh")
+
+
+cursor.close()
+connection.close()
+
+# -------------------------------------------------------------------------------------------------------------
+# Creating the corresponding tables in the server
+##  Connect to the newly created database
+connection = pyodbc.connect(
+    'DRIVER={ODBC Driver 17 for SQL Server};'
+    f'SERVER={server};'
+    'DATABASE=dwh;'
+    'Trusted_Connection=yes;',
+    autocommit=True
+)
+
+cursor = connection.cursor()
+
+## Table creation
+tables = [
+    """CREATE TABLE transactions_data (
+        id INT,
+        date DATETIME,
+        client_id INT,
+        card_id INT, 
+        amount VARCHAR(50), 
+        use_chip VARCHAR(50),
+        merchant_id INT, 
+        merchant_city VARCHAR(50),
+        merchant_state VARCHAR(50),
+        zip INT,
+        mcc INT,
+        errors VARCHAR(255)
+    )""",
+    """CREATE TABLE users_data (
+        id INT,
+        current_age INT, 
+        retirement_age INT, 
+        birth_year INT,
+        birth_month INT,
+        gender VARCHAR(20),
+        address VARCHAR(255),
+        latitude INT,
+        longitude INT, 
+        per_capita_income VARCHAR(10),
+        yearly_income VARCHAR(10),
+        total_debt VARCHAR(10),
+        credit_score INT,
+        num_credit_cards INT,
+        employment_status VARCHAR(20),
+        education_level VARCHAR(20)
+    )""",
+    """CREATE TABLE cards_data (
+        id INT,
+        client_id INT,
+        card_brand VARCHAR(20),
+        card_type VARCHAR(20),
+        card_number VARCHAR(20),
+        expires VARCHAR(20),
+        cvv INT,
+        has_chip VARCHAR(10),
+        num_cards_issued INT,
+        credit_limit VARCHAR(20),
+        acct_open_date VARCHAR(20),
+        year_pin_last_changed INT,
+        card_on_dark_web VARCHAR(10),
+        issuer_bank_name VARCHAR(50),
+        issuer_bank_state VARCHAR(20),
+        issuer_bank_type VARCHAR(20),
+        issuer_risk_rating VARCHAR(20)
+    )""",
+    """CREATE TABLE mcc_data (
+        code VARCHAR(20),
+        description VARCHAR(200),
+        notes VARCHAR(20),
+        updated_by VARCHAR(50)
+    )"""
+]
+
+for stmt in tables:
+    cursor.execute(stmt)
+connection.commit()
+
+cursor.close()
+connection.close()
+
+# -------------------------------------------------------------------------------------------------------------
+# Ingesting the data from csv files into the tables inside the warehouse
+
+## Establish connection
+database = 'dwh'
+conn = pyodbc.connect(
+    f'DRIVER={{ODBC Driver 17 for SQL Server}};SERVER={server};DATABASE={'dwh'};Trusted_Connection=yes;'
+)
+cursor = conn.cursor()
+
+## Function to load a csv file into sql server database
+def load_csv_to_sql(file_path, table_name, columns, sep=',', chunksize=1000):
+    placeholders = ", ".join(["?"] * len(columns))
+    sql = f"INSERT INTO {table_name} ({', '.join(columns)}) VALUES ({placeholders})"
+
+    cursor.fast_executemany = True
+    total_rows = 0
+
+    for chunk in pd.read_csv(file_path, sep=sep, chunksize=chunksize):
+        chunk = chunk.replace({np.nan: None, "": None})
+        chunk = chunk[columns]
+
+        data = list(chunk.itertuples(index=False, name=None))
+
+        cursor.executemany(sql, data)
+        conn.commit()
+
+        total_rows += len(chunk)
+
+    print(f"Inserted {total_rows} rows into {table_name}")
+
+## Transactions_data ingestion
+load_csv_to_sql(
+    file_path=r"G:/Users/Quan/Downloads/Dataset-final-project/Dataset-final-project/transactions_data.csv",
+    table_name="transactions_data",
+    columns = [
+    "id",
+    "date",
+    "client_id",
+    "card_id",
+    "amount",
+    "use_chip",
+    "merchant_id",
+    "merchant_city",
+    "merchant_state",
+    "zip",
+    "mcc",
+    "errors"
+]
+)
+
+## Users_data ingestion
+load_csv_to_sql(
+    file_path=r"G:/Users/Quan/Downloads/Dataset-final-project/Dataset-final-project/users_data.csv",
+    table_name="users_data",
+    columns=[
+        "id",
+        "current_age",
+        "retirement_age",
+        "birth_year",
+        "birth_month",
+        "gender",
+        "address",
+        "latitude",
+        "longitude",
+        "per_capita_income",
+        "yearly_income",
+        "total_debt",
+        "credit_score",
+        "num_credit_cards",
+        "employment_status",
+        "education_level"
+    ]
+)
+
+## Cards_data ingestion
+load_csv_to_sql(
+    file_path=r"G:/Users/Quan/Downloads/Dataset-final-project/Dataset-final-project/cards_data.csv",
+    table_name="cards_data",
+    columns=[
+        "id",
+        "client_id",
+        "card_brand",
+        "card_type",
+        "card_number",
+        "expires",
+        "cvv",
+        "has_chip",
+        "num_cards_issued",
+        "credit_limit",
+        "acct_open_date",
+        "year_pin_last_changed",
+        "card_on_dark_web",
+        "issuer_bank_name",
+        "issuer_bank_state",
+        "issuer_bank_type",
+        "issuer_risk_rating"
+    ]
+)
+
+## Mcc_data ingestion
+load_csv_to_sql(
+    file_path=r"G:/Users/Quan/Downloads/Dataset-final-project/Dataset-final-project/mcc_data.csv",
+    table_name="mcc_data",
+    columns=[
+        "code",
+        "description",
+        "notes",
+        "updated_by"
+    ]
+)
+
+cursor.close()
+conn.close()
+
+# ------------------------------------------------------------------------------------------
+# Useful functions to drop or truncate table for error fixing
+## Drop table function and code, uncomment server connection if needed
+conn = pyodbc.connect(
+    f'DRIVER={{ODBC Driver 17 for SQL Server}};SERVER={server};DATABASE={'dwh'};Trusted_Connection=yes;'
+)
+cursor = conn.cursor()
+
+
+listed_table = ["transactions_data", "users_data", "cards_data", "mcc_data"]
+
+def drop_all_tables(cursor, table_list):
+    for table in table_list:
+        cursor.execute(f"DROP TABLE {table}")
+        print(f"Table {table} dropped.")
+    cursor.connection.commit()
+
+drop_all_tables(cursor, listed_table)
+
+
+
+
+## Truncate function just to remove all data from table if needed
+listed_table = ["transactions_data", "users_data", "cards_data", "mcc_data"]
+
+def truncate_all_tables(cursor, table_list):
+    for table in table_list:
+        cursor.execute(f"TRUNCATE TABLE {table}")
+        print(f"Table {table} truncated.")
+    cursor.connection.commit()
+    print("All tables truncated successfully!")
+
+truncate_all_tables(cursor, listed_table)
+
+cursor.close()
+conn.close()
