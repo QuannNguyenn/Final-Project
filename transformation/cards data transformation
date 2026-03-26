@@ -1,6 +1,8 @@
 import pyodbc
 import pandas as pd
 import numpy as np
+from word2number import w2n
+import re
 
 server = r'QUAN-CORNER\SQLEXPRESS01'
 
@@ -41,6 +43,7 @@ cards_data_df["issuer_risk_rating"].unique()
 
 ## Columns that are found to have inconsistent formating are: card_brand, card_type, issuer_bank_name, issuer_bank_state, issuer_bank_type, and issuer_risk_rating
 
+# ------------------------------------------------------------------------
 # Cleaning the naming scheme of inconsistent columns
 ## card_brand
 def clean_card_brand(col):
@@ -230,27 +233,378 @@ cards_data_df["issuer_bank_type"] = clean_bank_type(cards_data_df["issuer_bank_t
 cards_data_df["issuer_bank_type"].unique()
 
 
+## Issuer risk rating
+def clean_risk_rating(col):
+    col = col.astype(str).str.strip().str.lower()
+
+    return col.replace({
+        # --- LOW ---
+        r".*low.*": "Low",
+
+        # --- MEDIUM ---
+        r".*med.*": "Medium",
+
+        # --- UNKNOWN (optional) ---
+        r"^unknown$": "Not Available",
+        r"^not available$": "Not Available"
+    }, regex=True)
+
+
+cards_data_df["issuer_risk_rating"] = clean_risk_rating(cards_data_df["issuer_risk_rating"])
+
+cards_data_df["issuer_risk_rating"].unique()
+
+
+# ------------------------------------------------------------------------
 # Fixing numeric columns
-bad_rows = cards_data_df[
-    ~cards_data_df["card_number"].str.endswith(".0", na=False)
-]
 
-valid_16 = cards_data_df[
-    cards_data_df["card_number"]
-    .astype(str)
-    .str.replace(r"\.\d+$", "", regex=True)  # remove decimal part
-    .str.len() == 16
-]
+## Card number 
+### Card numbers are float values, so we need to remove the decimal point as well as the digit that comes after it
+def clean_card_number(x):
+    if pd.isna(x):
+        return None
 
-print(valid_16)
+    # Convert to string
+    x = str(x).strip()
 
-invalid = cards_data_df[
-    cards_data_df["card_number"]
-    .astype(str)
-    .str.replace(r"\.\d+$", "", regex=True)
-    .str.len() != 16
-]
+    # If there's a decimal → keep only part before '.'
+    if "." in x:
+        x = x.split(".")[0]
 
-print(invalid)
+    # Remove all non-digit characters
+    digits = ''.join(ch for ch in x if ch.isdigit())
 
-print(bad_rows)
+    return digits if digits else None
+
+cards_data_df["card_number"] = cards_data_df["card_number"].apply(clean_card_number) # Remove the decimal and digit
+
+## id
+duplicates = cards_data_df[
+    cards_data_df["id"].duplicated(keep=False)
+].sort_values("id")
+
+duplicates[["id"]]
+
+print(duplicates)
+priority = {"Low": 0, "Medium": 1}
+
+cards_data_df = (
+    cards_data_df.assign(risk_order=cards_data_df["issuer_risk_rating"].map(priority))
+    .sort_values(["id", "risk_order"])
+    .drop_duplicates(subset="id", keep="first")
+    .drop(columns="risk_order")
+)
+
+
+duplicates_check = cards_data_df[
+    cards_data_df["id"].duplicated(keep=False)
+].sort_values("id")
+
+print(duplicates_check)
+### There are id duplicates. Upon further inspection, duplicated ids have the same client, brand, card number and cvv, indicating the same card. Because of this, we are motivated to remove the duplicated the row.
+### The suggested logic is that the row with the highest issuer risk rating to be removed.
+
+## CVV
+### In the dimensional model, there would be no use case for CVV data at all, as it does not provide analytical value, and contain highly sensitive information. Hence we are motivated to drop CVV in the transformation process
+cards_data_df = cards_data_df.drop(columns=["cvv"])
+
+## credit_limit
+
+def clean_credit_limit(col):
+    s = col.astype(str).str.strip().str.lower()
+
+    s = s.replace({
+        "error_value": pd.NA,
+        "limit_unknown": pd.NA,
+        "unknown": pd.NA,
+        "not available": pd.NA
+    })
+
+    cleaned_text = s.str.replace(r"[$,\s]", "", regex=True)
+
+    k_mask = cleaned_text.str.fullmatch(r"-?\d+(\.\d+)?k", na=False)
+    k_numeric = pd.to_numeric(
+        cleaned_text.where(k_mask).str.replace("k", "", regex=False),
+        errors="coerce"
+    ) * 1000
+
+    normal_numeric = pd.to_numeric(cleaned_text.where(~k_mask), errors="coerce")
+
+    result = k_numeric.fillna(normal_numeric)
+
+    remaining_mask = result.isna() & s.notna()
+    if remaining_mask.any():
+        from word2number import w2n
+
+        def try_word_to_num(x):
+            try:
+                return w2n.word_to_num(str(x))
+            except Exception:
+                return np.nan
+
+        word_numeric = s.where(remaining_mask).apply(try_word_to_num)
+        result = result.fillna(word_numeric)
+
+    result = result.abs()
+
+    # force numeric again before Int64 cast
+    result = pd.to_numeric(result, errors="coerce")
+
+    return result.round().astype("Int64")
+
+cards_data_df["credit_limit"] = clean_credit_limit(cards_data_df["credit_limit"])
+
+
+cards_data_df.head(20)
+cards_data_df["credit_limit"] = cards_data_df["credit_limit"].astype("Int64") # Convert back to int
+
+### From the list, we can see that there are k values, error_value, limit_unknown and written number (ten thousand). We need to normalize this. For error_value and limit_unknown, it will be converted to 'Not Available',
+### and for the k values and writte number, they will be converted to their numeric form
+
+## has_chip
+cards_data_df["has_chip"].unique()
+### Since its already consistent, there is no need to transform 
+
+## year_pin_last_changed
+cards_data_df["year_pin_last_changed"].unique()
+### Since its already consistent, there is no need to transform 
+
+## card_on_dark_web
+cards_data_df["card_on_dark_web"].unique()
+### Since its already consistent, there is no need to transform 
+
+## acct_open_date
+def clean_acct_open_date(col):
+    original = col.copy()
+    s = col.astype(str).str.strip()
+
+    missing_values = {"not available", "unknown", "none", "null", "", "nan"}
+    s_lower = s.str.lower()
+    s = s.mask(s_lower.isin(missing_values), pd.NA)
+
+    month_map = {
+        "jan": 1, "feb": 2, "mar": 3, "apr": 4,
+        "may": 5, "jun": 6, "jul": 7, "aug": 8,
+        "sep": 9, "oct": 10, "nov": 11, "dec": 12
+    }
+
+    def parse_value(val):
+        if pd.isna(val):
+            return pd.NaT
+
+        v = str(val).strip()
+
+        # 1) Mon-YY like Sep-02
+        m = re.fullmatch(r"([A-Za-z]{3})-(\d{2})", v)
+        if m:
+            mon = month_map.get(m.group(1).lower())
+            yy = int(m.group(2))
+            year = 2000 + yy if yy <= 26 else 1900 + yy
+            if mon:
+                return pd.Timestamp(year=year, month=mon, day=1)
+
+        # 2) Text dates like Feb 01 1999
+        m = re.fullmatch(r"([A-Za-z]{3})\s+(\d{2})\s+(\d{4})", v)
+        if m:
+            mon = month_map.get(m.group(1).lower())
+            day = int(m.group(2))
+            year = int(m.group(3))
+            if mon:
+                try:
+                    return pd.Timestamp(year=year, month=mon, day=day)
+                except ValueError:
+                    return pd.NaT
+
+        # 3) ISO dates like 1999-05-01
+        if re.fullmatch(r"\d{4}-\d{2}-\d{2}", v):
+            return pd.to_datetime(v, errors="coerce")
+
+        # 4) Numeric slash/dash dates like 01-04-99, 03/01/1999
+        return pd.to_datetime(v, errors="coerce", dayfirst=True)
+
+    parsed = s.apply(parse_value)
+
+    # Remove future dates
+    today = pd.Timestamp.today().normalize()
+    parsed = parsed.where(parsed <= today, pd.NaT)
+
+    # Raw values that still failed
+    invalid_values = original[
+        parsed.isna() & ~original.astype(str).str.strip().str.lower().isin(missing_values)
+    ].astype(str).str.strip().unique()
+
+    return parsed, invalid_values
+    
+
+cards_data_df["acct_open_date"], invalid_values = clean_acct_open_date(
+    cards_data_df["acct_open_date"]
+)
+print(list(invalid_values))
+
+cards_data_df["acct_open_date"] = cards_data_df["acct_open_date"].dt.date
+cards_data_df["acct_open_date"] = cards_data_df["acct_open_date"].where(
+    cards_data_df["acct_open_date"].notna(), None
+)
+### acct_open_date has a lot of formatting inconsistency. The function adressed all of those inconsistencies by converting the 4 cases into the standardized datetime format (refer to function above)
+### future dates for acct_open_date doesn't make any sense, so along with unknown or not available rows, they are converted to NaT (The choice for this is that there is no analytical value in categorizing
+### Not Available, and it makes it easier to ingest the data back into SQL)
+
+
+## expires
+cards_data_df["expires"], invalid_values = clean_acct_open_date(
+    cards_data_df["expires"]
+)
+### Used the same function as acct_open_date, though its formatting is way cleaner where it only have the month - year format
+cards_data_df.head(10)
+
+#---------------------------------------------------------------------------------------------------------------
+# Loading the transformed data into schema
+"""conn = pyodbc.connect(
+    'DRIVER={ODBC Driver 17 for SQL Server};'
+    f'SERVER={server};'
+    'DATABASE=master;'
+    'Trusted_Connection=yes;',
+    autocommit=True 
+)
+
+cursor = conn.cursor()
+
+# Create schema database
+cursor.execute("CREATE DATABASE dimensional_dwh")
+
+cursor.close()
+conn.close()"""
+
+
+#---------------------------------------------------------------------------------------------------------------
+# Create table for insertion
+conn = pyodbc.connect(
+    'DRIVER={ODBC Driver 17 for SQL Server};'
+    f'SERVER={server};'
+    'DATABASE=dimensional_dwh;'
+    'Trusted_Connection=yes;',
+    autocommit=True 
+)
+
+cursor = conn.cursor()
+
+cursor.execute("""
+CREATE TABLE cards_data_transformed (
+    id INT,
+    client_id INT,
+    card_brand VARCHAR(20),
+    card_type VARCHAR(20),
+    card_number VARCHAR(20),
+    expires DATE,
+    has_chip VARCHAR(10),
+    num_cards_issued INT,
+    credit_limit INT,
+    acct_open_date DATE,
+    year_pin_last_changed INT,
+    card_on_dark_web VARCHAR(10),
+    issuer_bank_name VARCHAR(50),
+    issuer_bank_state VARCHAR(20),
+    issuer_bank_type VARCHAR(20),
+    issuer_risk_rating VARCHAR(20)
+)
+""")
+conn.commit()
+cursor.close()
+conn.close()
+
+#---------------------------------------------------------------------------------------------------------------
+## Ingesting the data into the dimensional model
+
+conn = pyodbc.connect(
+    f'DRIVER={{ODBC Driver 17 for SQL Server}};SERVER={server};DATABASE={'dimensional_dwh'};Trusted_Connection=yes;'
+)
+cursor = conn.cursor()
+
+## Function to load the df into sql
+def load_df_to_sql(df, table_name, columns, chunksize=1000):
+    placeholders = ", ".join(["?"] * len(columns))
+    sql = f"INSERT INTO {table_name} ({', '.join(columns)}) VALUES ({placeholders})"
+
+    cursor.fast_executemany = True
+    total_rows = 0
+
+    # Keep only needed columns and replace pandas missing values with None
+    df = df[columns].copy()
+    df = df.replace({np.nan: None, "": None})
+
+    for start in range(0, len(df), chunksize):
+        chunk = df.iloc[start:start + chunksize]
+
+        data = list(chunk.itertuples(index=False, name=None))
+
+        cursor.executemany(sql, data)
+        conn.commit()
+
+        total_rows += len(chunk)
+
+    print(f"Inserted {total_rows} rows into {table_name}")
+
+
+load_df_to_sql(
+    df=cards_data_df,
+    table_name="cards_data_transformed",
+    columns= [
+        "id",
+        "client_id",
+        "card_brand",
+        "card_type",
+        "card_number",
+        "expires",
+        "has_chip",
+        "num_cards_issued",
+        "credit_limit",
+        "acct_open_date",
+        "year_pin_last_changed",
+        "card_on_dark_web",
+        "issuer_bank_name",
+        "issuer_bank_state",
+        "issuer_bank_type",
+        "issuer_risk_rating"
+    ],
+    chunksize=1
+)
+
+
+
+# ------------------------------------------------------------------------------------------
+# Useful functions to drop table for error fixing
+## Drop table function and code, uncomment server connection if needed
+"""conn = pyodbc.connect(
+    f'DRIVER={{ODBC Driver 17 for SQL Server}};SERVER={server};DATABASE={'dimensional_dwh'};Trusted_Connection=yes;'
+)
+cursor = conn.cursor()
+
+
+listed_table = ["cards_data_transformed"]
+
+def drop_all_tables(cursor, table_list):
+    for table in table_list:
+        cursor.execute(f"DROP TABLE {table}")
+        print(f"Table {table} dropped.")
+    cursor.connection.commit()
+
+drop_all_tables(cursor, listed_table)
+
+## Truncate function just to remove all data from table if needed
+listed_table = ["cards_data_transformed"]
+
+def truncate_all_tables(cursor, table_list):
+    for table in table_list:
+        cursor.execute(f"TRUNCATE TABLE {table}")
+        print(f"Table {table} truncated.")
+    cursor.connection.commit()
+    print("All tables truncated successfully!")
+
+truncate_all_tables(cursor, listed_table)
+
+cursor.close()
+conn.close()
+
+"""
+
+
