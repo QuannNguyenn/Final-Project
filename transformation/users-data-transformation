@@ -1,1 +1,405 @@
+import pyodbc
+import pandas as pd
+import numpy as np
+import re
+from word2number import w2n
 
+
+# Initializing the transformation process
+server = r'QUAN-CORNER\SQLEXPRESS01'
+
+conn = pyodbc.connect(
+    f'DRIVER={{ODBC Driver 17 for SQL Server}};SERVER={server};DATABASE={'dwh'};Trusted_Connection=yes;'
+)
+
+cursor = conn.cursor()
+
+# importing as pandas df from sql server
+users_data_df = pd.read_sql(
+    "SELECT * FROM dbo.users_data"
+    , conn)
+
+users_data_df.head(10)
+
+## Check for nulls
+na_rows = users_data_df[users_data_df.isnull().any(axis=1)]
+print(na_rows)
+### There are no Null values in the table
+
+# -----------------------------------------------------------------------------------------------------------------------------------------------------------
+# Transforming text columns
+## Gender
+users_data_df["gender"].unique()
+### No formatting issue with gender, we can leave it as is
+
+## Address
+### In the address column, there are rows with fully capitalized addresses. This inconsistency should be addressed for easier address tracing during analysis
+def transform_address(text):
+    return re.sub(r'(\d+)(st|nd|rd|th)\b',
+                  lambda x: x.group(1) + x.group(2).lower(),
+                  text,
+                  flags=re.IGNORECASE)
+
+users_data_df['address'] = users_data_df['address'].str.title().apply(transform_address)
+
+users_data_df['address'].head(10)
+
+## Employment status
+users_data_df["employment_status"].unique()
+### Employment status has formatting inconsistency that needs to be addressed
+def clean_employment_status(col):
+    col = col.astype(str).str.strip().str.lower()
+    
+    return col.replace({
+        # --- EMPLOYED ---
+        r".*empl[o0]yed.*": "Employed",
+
+        # --- SELF-EMPLOYED ---
+        r".*self[\s\-]?empl[o0]yed.*": "Self-Employed",
+        r".*self[\s\-]?employd.*": "Self-Employed",
+
+        # --- STUDENT ---
+        r".*stud[e]?nt.*": "Student",
+        r".*studnt.*": "Student",
+
+        # --- RETIRED ---
+        r".*ret[i]?r[e]?d.*": "Retired",
+        r".*ret\.*$": "Retired",
+
+        # --- UNEMPLOYED ---
+        r".*un[\s\-]?empl[o0]yed.*": "Unemployed",
+        r".*unemployd.*": "Unemployed",
+
+        # --- FALLBACK ---
+        r"^nan$": "Not Available",
+        r"^$": "Not Available"
+        
+    }, regex=True)
+
+users_data_df["employment_status"] = clean_employment_status(
+    users_data_df["employment_status"]
+)
+
+### Check again
+users_data_df["employment_status"].unique() 
+
+## Education level
+users_data_df["education_level"].unique() 
+### Education level also have formatting inconsistencies that needs to be addressed
+def clean_education_level(col):
+    col = col.astype(str).str.strip().str.lower()
+    
+    return col.replace({
+        # --- DOCTORATE (most specific first) ---
+        r".*doctor.*": "Doctorate",
+        r".*phd.*": "Doctorate",
+
+        # --- MASTER ---
+        r".*master.*": "Master",
+        r".*\bms\b.*": "Master",
+        r".*\bma\b.*": "Master",
+        r".*ms/ma.*": "Master",
+        r".*master'?s.*": "Master",
+
+        # --- BACHELOR ---
+        r".*bachelor.*": "Bachelor",
+        r".*\bba\b.*": "Bachelor",
+        r".*\bbs\b.*": "Bachelor",
+        r".*ba/bs.*": "Bachelor",
+        r".*bachelor'?s.*": "Bachelor",
+
+        # --- ASSOCIATE ---
+        r".*assoc.*": "Associate",
+        r".*associate.*": "Associate",
+
+        # --- HIGH SCHOOL ---
+        r".*high\s*school.*": "High School",
+        r".*highschool.*": "High School",
+        r"^hs$": "High School",
+
+        # --- FALLBACK ---
+        r"^nan$": "Not Available",
+        r"^$": "Not Available"
+        
+    }, regex=True)
+
+users_data_df["education_level"] = clean_education_level(
+    users_data_df["education_level"]
+)
+
+users_data_df["education_level"].unique() 
+
+# -----------------------------------------------------------------------------------------------------------------------------------------------------------
+# Transforming numerical columns as required
+## Current Age
+### The current_age column is static and not updated over the years so most data is likely inaccurate. To address this, we can recalculate their age from birth year
+current_year = pd.Timestamp.now().year
+
+users_data_df["current_age"] = (
+    current_year - pd.to_numeric(users_data_df["birth_year"], errors="coerce")
+)
+
+users_data_df.head(10)
+
+
+## Retirement age
+### I believe it is fine to leave as is since there are no formatting error, missing values or abnormalities
+
+## Birth year
+### We believe it is also fine to leave as is since there are no formatting error, missing values or abnormalities
+
+## Birth month
+### Current birth month is in the numeric form, we can create a new column that represents the month by text for readability if needed
+month_map = {
+    1: "January", 2: "February", 3: "March", 4: "April",
+    5: "May", 6: "June", 7: "July", 8: "August",
+    9: "September", 10: "October", 11: "November", 12: "December"
+}
+
+users_data_df["birth_month_name"] = pd.to_numeric(
+    users_data_df["birth_month"], errors="coerce"
+).map(month_map)
+
+
+### Reorder safely (only if not already in correct position)
+cols = list(users_data_df.columns)
+
+### Remove it if it already exists (prevents duplicates)
+if "birth_month_name" in cols:
+    cols.remove("birth_month_name")
+
+### Insert in correct position
+idx = cols.index("birth_month")
+cols.insert(idx + 1, "birth_month_name")
+
+### Apply ordering
+users_data_df = users_data_df[cols]
+users_data_df.head(10)
+
+## Per capita income
+### Same issues as the credit limit in cards_data, we can use the same function to clean it
+def clean_income(col):
+    s = col.astype(str).str.strip().str.lower()
+
+    s = s.replace({
+        "error_value": pd.NA,
+        "limit_unknown": pd.NA,
+        "unknown": pd.NA,
+        "not available": pd.NA
+    })
+
+    cleaned_text = s.str.replace(r"[$,\s]", "", regex=True)
+
+    k_mask = cleaned_text.str.fullmatch(r"-?\d+(\.\d+)?k", na=False)
+    k_numeric = pd.to_numeric(
+        cleaned_text.where(k_mask).str.replace("k", "", regex=False),
+        errors="coerce"
+    ) * 1000
+
+    normal_numeric = pd.to_numeric(cleaned_text.where(~k_mask), errors="coerce")
+
+    result = k_numeric.fillna(normal_numeric)
+
+    remaining_mask = result.isna() & s.notna()
+    if remaining_mask.any():
+        from word2number import w2n
+
+        def try_word_to_num(x):
+            try:
+                return w2n.word_to_num(str(x))
+            except Exception:
+                return np.nan
+
+        word_numeric = s.where(remaining_mask).apply(try_word_to_num)
+        result = result.fillna(word_numeric)
+
+    result = result.abs()
+
+    # force numeric again before Int64 cast
+    result = pd.to_numeric(result, errors="coerce")
+
+    return result.round().astype("Int64")
+
+users_data_df["per_capita_income"] = clean_income(users_data_df["per_capita_income"])
+
+users_data_df.head(10)
+
+## Yearly income
+### Similar issue with per capita income, perform the same transformation
+users_data_df["yearly_income"] = clean_income(users_data_df["yearly_income"])
+
+users_data_df.head(10)
+
+## Total debt
+### Similar issue with per capita income and yearly income, perform the same transformation
+users_data_df["total_debt"] = clean_income(users_data_df["total_debt"])
+
+users_data_df.head(10)
+
+## Credit score
+### No issues with formatting or irregular, fine to leave as is
+
+## Number of credit cards
+### No issues with formatting or irregular, fine to leave as is
+
+## Latitude and Longitude
+### Not sensititve information as its not precise (city or area level not pin point), we can leave it as is
+
+#---------------------------------------------------------------------------------------------------------------
+# Loading the transformed data into schema
+'''conn = pyodbc.connect(
+    'DRIVER={ODBC Driver 17 for SQL Server};'
+    f'SERVER={server};'
+    'DATABASE=master;'
+    'Trusted_Connection=yes;',
+    autocommit=True 
+)
+
+cursor = conn.cursor()
+
+# Create schema database
+cursor.execute("CREATE DATABASE dimensional_dwh")
+
+cursor.close()
+conn.close()'''
+
+
+#---------------------------------------------------------------------------------------------------------------
+# Create table for insertion (Uncomment to create table if haven't)
+'''conn = pyodbc.connect(
+    'DRIVER={ODBC Driver 17 for SQL Server};'
+    f'SERVER={server};'
+    'DATABASE=dimensional_dwh;'
+    'Trusted_Connection=yes;',
+    autocommit=True 
+)
+
+cursor = conn.cursor()
+
+cursor.execute("""
+CREATE TABLE users_data_transformed (
+    id INT,
+    current_age INT, 
+    retirement_age INT, 
+    birth_year INT,
+    birth_month INT,
+    birth_month_name VARCHAR(20),
+    gender VARCHAR(20),
+    address VARCHAR(255),
+    latitude INT,
+    longitude INT, 
+    per_capita_income INT,
+    yearly_income INT,
+    total_debt INT,
+    credit_score INT,
+    num_credit_cards INT,
+    employment_status VARCHAR(20),
+    education_level VARCHAR(20)
+)
+""")
+conn.commit()
+cursor.close()
+conn.close()'''
+
+#---------------------------------------------------------------------------------------------------------------
+## Ingesting the data into the dimensional model
+
+conn = pyodbc.connect(
+    f'DRIVER={{ODBC Driver 17 for SQL Server}};SERVER={server};DATABASE={'dimensional_dwh'};Trusted_Connection=yes;'
+)
+cursor = conn.cursor()
+
+## Function to load the df into sql
+
+def load_df_to_sql(df, table_name, columns, chunksize=1000):
+    placeholders = ", ".join(["?"] * len(columns))
+    sql = f"INSERT INTO {table_name} ({', '.join(columns)}) VALUES ({placeholders})"
+
+    cursor.fast_executemany = True
+    total_rows = 0
+
+    # Keep only needed columns and replace missing values
+    df = df[columns].copy()
+    df = df.replace({np.nan: None, "": None})
+
+    df = df.astype(object).where(pd.notnull(df), None)
+
+    for start in range(0, len(df), chunksize):
+        chunk = df.iloc[start:start + chunksize]
+
+        data = [
+            tuple(x.item() if hasattr(x, "item") else x for x in row)
+            for row in chunk.to_numpy()
+        ]
+
+        cursor.executemany(sql, data)
+        conn.commit()
+
+        total_rows += len(chunk)
+
+    print(f"Inserted {total_rows} rows into {table_name}")
+
+
+load_df_to_sql(
+    df=users_data_df,
+    table_name="users_data_transformed",
+    columns= [
+        "id",
+        "current_age",
+        "retirement_age",
+        "birth_year",
+        "birth_month",
+        "birth_month_name",
+        "gender",
+        "address",
+        "latitude",
+        "longitude",
+        "per_capita_income",
+        "yearly_income",
+        "total_debt",
+        "credit_score",
+        "num_credit_cards",
+        "employment_status",
+        "education_level"
+    ],
+    chunksize=1
+)
+
+
+
+# ------------------------------------------------------------------------------------------
+# Useful functions to drop table for error fixing
+## Drop table function and code, uncomment server connection if needed
+'''conn = pyodbc.connect(
+    f'DRIVER={{ODBC Driver 17 for SQL Server}};SERVER={server};DATABASE={'dimensional_dwh'};Trusted_Connection=yes;'
+)
+cursor = conn.cursor()
+
+
+listed_table = ["users_data_transformed"]
+
+def drop_all_tables(cursor, table_list):
+    for table in table_list:
+        cursor.execute(f"DROP TABLE {table}")
+        print(f"Table {table} dropped.")
+    cursor.connection.commit()
+
+drop_all_tables(cursor, listed_table)
+
+
+## Truncate function just to remove all data from table if needed
+listed_table = ["cards_data_transformed"]
+
+def truncate_all_tables(cursor, table_list):
+    for table in table_list:
+        cursor.execute(f"TRUNCATE TABLE {table}")
+        print(f"Table {table} truncated.")
+    cursor.connection.commit()
+    print("All tables truncated successfully!")
+
+truncate_all_tables(cursor, listed_table)
+
+cursor.close()
+conn.close()
+
+'''
