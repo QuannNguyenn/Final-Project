@@ -48,7 +48,7 @@ tables = [
         merchant_id INT, 
         merchant_city VARCHAR(50),
         merchant_state VARCHAR(50),
-        zip INT,
+        zip VARCHAR(20),
         mcc INT,
         errors VARCHAR(255)
     )""",
