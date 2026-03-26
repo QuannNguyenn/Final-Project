@@ -575,7 +575,7 @@ load_df_to_sql(
 # Useful functions to drop table for error fixing
 ## Drop table function and code, uncomment server connection if needed
 """conn = pyodbc.connect(
-    f'DRIVER={{ODBC Driver 17 for SQL Server}};SERVER={server};DATABASE={'dimensional_dwh'};Trusted_Connection=yes;'
+    f'DRIVER={{ODBC Driver 17 for SQL Server}};SERVER={server};DATABASE={'transformation'};Trusted_Connection=yes;'
 )
 cursor = conn.cursor()
 
