@@ -1,0 +1,193 @@
+import pyodbc
+import pandas as pd
+import numpy as np
+import re
+from word2number import w2n
+
+
+# Initializing the transformation process
+server = r'QUAN-CORNER\SQLEXPRESS01'
+
+conn = pyodbc.connect(
+    f'DRIVER={{ODBC Driver 17 for SQL Server}};SERVER={server};DATABASE={'dwh'};Trusted_Connection=yes;'
+)
+
+cursor = conn.cursor()
+
+# importing as pandas df from sql server
+mcc_data_df = pd.read_sql(
+    "SELECT * FROM dbo.mcc_data"
+    , conn)
+
+mcc_data_df.head(10)
+
+#----------------------------------------------------------------------------------------------------------
+# Transforming columns as necessary
+## Code (merchant id)
+### There are inconsistency in the code format that needs to be addressed. We only want to keep the 4 identifying digit
+### In the last 2 rows, there are note and comment which are just description of the data. It won't be necessary to keep it for analytics therefore it should be removed
+### After the first 2 cleaning steps, we noticed that there are duplicate id rows with identical data, hence it needs further cleaning (only 1 unique id)
+def clean_mcc_code(col):
+    col = col.astype(str).str.strip()
+    
+    return (
+        col
+        .str.extract(r'(\d{4})', expand=False)
+        .pipe(pd.to_numeric, errors='coerce')
+        .astype("Int64")  
+    )
+
+mcc_data_df["code"] = clean_mcc_code(mcc_data_df["code"])
+mcc_data_df = mcc_data_df[mcc_data_df["code"].notna()]
+
+duplicates = (
+    mcc_data_df[mcc_data_df["code"].duplicated(keep=False)]
+    .sort_values("code")
+)
+
+### See the duplicated rows
+print(duplicates)
+
+### Remove duplicate
+mcc_data_df = mcc_data_df.drop_duplicates(subset=["code"], keep="first")
+
+## Description
+### To make easier reading and querying, standardize the text format for description so that only the first letter of each word is capitalized except small words like and, or, etc. (avoiding all capitalized text)
+### Also we need to address the leading spaces  
+
+def description_clean(col):
+    col = col.astype(str).str.strip().str.lower().str.title()
+    
+    # Lowercase small words
+    return col.str.replace(
+        r'\b(And|Or|Of|The|In|On|At|For|To)\b',
+        lambda x: x.group(0).lower(),
+        regex=True
+    )
+
+mcc_data_df["description"] = description_clean(mcc_data_df["description"])
+
+mcc_data_df.head(10)
+
+## Notes
+mcc_data_df["notes"].unique()
+### For better categorization, we can convert null values to "No notes" instead of Not Available, as it can be understood that there is simply no note for this specific id, not that it is not available
+mcc_data_df["notes"] = mcc_data_df["notes"].fillna("No notes")
+
+## Updated by
+mcc_data_df["updated_by"].unique()
+### For better categorization, we can convert null values "unknown". It is better than not available because unknown suggests that someone updated the data, but we simply don't know who, it makes it more interpretable this way. 
+mcc_data_df["updated_by"] = mcc_data_df["updated_by"].fillna("unknown")
+
+
+#---------------------------------------------------------------------------------------------------------------
+# Create table for insertion (Uncomment to create table if haven't)
+'''conn = pyodbc.connect(
+    'DRIVER={ODBC Driver 17 for SQL Server};'
+    f'SERVER={server};'
+    'DATABASE=dimensional_dwh;'
+    'Trusted_Connection=yes;',
+    autocommit=True 
+)
+
+cursor = conn.cursor()
+
+cursor.execute("""
+CREATE TABLE mcc_data_transformed (
+    code INT,
+    description VARCHAR(255),
+    notes VARCHAR(20),
+    updated_by VARCHAR(50)
+)
+""")
+conn.commit()
+cursor.close()
+conn.close()'''
+
+
+#---------------------------------------------------------------------------------------------------------------
+## Ingesting the data into the dimensional model
+conn = pyodbc.connect(
+    f'DRIVER={{ODBC Driver 17 for SQL Server}};SERVER={server};DATABASE={'dimensional_dwh'};Trusted_Connection=yes;'
+)
+cursor = conn.cursor()
+
+## Function to load the df into sql
+
+def load_df_to_sql(df, table_name, columns, chunksize=1000):
+    placeholders = ", ".join(["?"] * len(columns))
+    sql = f"INSERT INTO {table_name} ({', '.join(columns)}) VALUES ({placeholders})"
+
+    cursor.fast_executemany = True
+    total_rows = 0
+
+    # Keep only needed columns and replace missing values
+    df = df[columns].copy()
+    df = df.replace({np.nan: None, "": None})
+
+    df = df.astype(object).where(pd.notnull(df), None)
+
+    for start in range(0, len(df), chunksize):
+        chunk = df.iloc[start:start + chunksize]
+
+        data = [
+            tuple(x.item() if hasattr(x, "item") else x for x in row)
+            for row in chunk.to_numpy()
+        ]
+
+        cursor.executemany(sql, data)
+        conn.commit()
+
+        total_rows += len(chunk)
+
+    print(f"Inserted {total_rows} rows into {table_name}")
+
+
+load_df_to_sql(
+    df=mcc_data_df,
+    table_name="mcc_data_transformed",
+    columns= [
+        "code",
+        "description",
+        "notes",
+        "updated_by"
+    ],
+    chunksize=1
+)
+
+# ------------------------------------------------------------------------------------------
+# Useful functions to drop table for error fixing
+## Drop table function and code, uncomment server connection if needed
+'''conn = pyodbc.connect(
+    f'DRIVER={{ODBC Driver 17 for SQL Server}};SERVER={server};DATABASE={'dimensional_dwh'};Trusted_Connection=yes;'
+)
+cursor = conn.cursor()
+
+
+listed_table = ["users_data_transformed"]
+
+def drop_all_tables(cursor, table_list):
+    for table in table_list:
+        cursor.execute(f"DROP TABLE {table}")
+        print(f"Table {table} dropped.")
+    cursor.connection.commit()
+
+drop_all_tables(cursor, listed_table)
+
+
+## Truncate function just to remove all data from table if needed
+listed_table = ["cards_data_transformed"]
+
+def truncate_all_tables(cursor, table_list):
+    for table in table_list:
+        cursor.execute(f"TRUNCATE TABLE {table}")
+        print(f"Table {table} truncated.")
+    cursor.connection.commit()
+    print("All tables truncated successfully!")
+
+truncate_all_tables(cursor, listed_table)
+
+cursor.close()
+conn.close()
+
+'''
