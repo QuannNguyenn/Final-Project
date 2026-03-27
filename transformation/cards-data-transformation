@@ -5,16 +5,15 @@ from word2number import w2n
 import re
 
 server = r'QUAN-CORNER\SQLEXPRESS01'
+base_conn = f'DRIVER={{ODBC Driver 17 for SQL Server}};SERVER={server};Trusted_Connection=yes;TrustServerCertificate=yes;'
 
-conn = pyodbc.connect(
-    f'DRIVER={{ODBC Driver 17 for SQL Server}};SERVER={server};DATABASE={'dwh'};Trusted_Connection=yes;'
-)
+conn = pyodbc.connect(base_conn + "DATABASE=dwh;", autocommit=True)
 
 cursor = conn.cursor()
 
 # importing as pandas df from sql server
 cards_data_df = pd.read_sql(
-    "SELECT * FROM dbo.cards_data"
+    "SELECT * FROM ingestion.cards_data"
     , conn)
 
 # Looking for null in the table
@@ -356,7 +355,6 @@ cards_data_df["credit_limit"] = clean_credit_limit(cards_data_df["credit_limit"]
 
 
 cards_data_df.head(20)
-cards_data_df["credit_limit"] = cards_data_df["credit_limit"].astype("Int64") # Convert back to int
 
 ### From the list, we can see that there are k values, error_value, limit_unknown and written number (ten thousand). We need to normalize this. For error_value and limit_unknown, it will be converted to 'Not Available',
 ### and for the k values and writte number, they will be converted to their numeric form
@@ -375,6 +373,9 @@ cards_data_df["card_on_dark_web"].unique()
 
 ## acct_open_date
 def clean_acct_open_date(col):
+    import pandas as pd
+    import re
+
     original = col.copy()
     s = col.astype(str).str.strip()
 
@@ -428,6 +429,9 @@ def clean_acct_open_date(col):
     today = pd.Timestamp.today().normalize()
     parsed = parsed.where(parsed <= today, pd.NaT)
 
+    # Convert to DATE only (remove time completely)
+    parsed = parsed.dt.date
+
     # Raw values that still failed
     invalid_values = original[
         parsed.isna() & ~original.astype(str).str.strip().str.lower().isin(missing_values)
@@ -441,11 +445,10 @@ cards_data_df["acct_open_date"], invalid_values = clean_acct_open_date(
 )
 print(list(invalid_values))
 
-cards_data_df["acct_open_date"] = cards_data_df["acct_open_date"].dt.date
 cards_data_df["acct_open_date"] = cards_data_df["acct_open_date"].where(
     cards_data_df["acct_open_date"].notna(), None
 )
-### acct_open_date has a lot of formatting inconsistency. The function adressed all of those inconsistencies by converting the 4 cases into the standardized datetime format (refer to function above)
+### acct_open_date has a lot of formatting inconsistency. The function adressed all of those inconsistencies by converting the 4 cases into the standardized date format (refer to function above)
 ### future dates for acct_open_date doesn't make any sense, so along with unknown or not available rows, they are converted to NaT (The choice for this is that there is no analytical value in categorizing
 ### Not Available, and it makes it easier to ingest the data back into SQL)
 
@@ -454,46 +457,34 @@ cards_data_df["acct_open_date"] = cards_data_df["acct_open_date"].where(
 cards_data_df["expires"], invalid_values = clean_acct_open_date(
     cards_data_df["expires"]
 )
+
 ### Used the same function as acct_open_date, though its formatting is way cleaner where it only have the month - year format
 cards_data_df.head(10)
 
-#---------------------------------------------------------------------------------------------------------------
-# Loading the transformed data into schema
-"""conn = pyodbc.connect(
-    'DRIVER={ODBC Driver 17 for SQL Server};'
-    f'SERVER={server};'
-    'DATABASE=master;'
-    'Trusted_Connection=yes;',
-    autocommit=True 
-)
-
-cursor = conn.cursor()
-
-# Create schema database
-cursor.execute("CREATE DATABASE dimensional_dwh")
-
-cursor.close()
-conn.close()"""
 
 
 #---------------------------------------------------------------------------------------------------------------
-# Create table for insertion
-conn = pyodbc.connect(
-    'DRIVER={ODBC Driver 17 for SQL Server};'
-    f'SERVER={server};'
-    'DATABASE=dimensional_dwh;'
-    'Trusted_Connection=yes;',
-    autocommit=True 
-)
-
+# Loading transformed data into transformation layer schema
+print("Connecting to dwh...")
+# We add DATABASE=DWH here
+conn = pyodbc.connect(base_conn + "DATABASE=dwh;", autocommit=True)
 cursor = conn.cursor()
+
+# Create Schema
+print("Checking Schema 'transformation'...")
+# Create the schema if it hasn't yet been created
+cursor.execute("""               
+IF NOT EXISTS (SELECT * FROM sys.schemas WHERE name = 'transformation')
+BEGIN
+    EXEC('CREATE SCHEMA [transformation]')
+END""")
 
 cursor.execute("""
-CREATE TABLE cards_data_transformed (
+CREATE TABLE [transformation].[cards_data] (
     id INT,
     client_id INT,
-    card_brand VARCHAR(20),
-    card_type VARCHAR(20),
+    card_brand VARCHAR(255),
+    card_type VARCHAR(255),
     card_number VARCHAR(20),
     expires DATE,
     has_chip VARCHAR(10),
@@ -502,7 +493,7 @@ CREATE TABLE cards_data_transformed (
     acct_open_date DATE,
     year_pin_last_changed INT,
     card_on_dark_web VARCHAR(10),
-    issuer_bank_name VARCHAR(50),
+    issuer_bank_name VARCHAR(255),
     issuer_bank_state VARCHAR(20),
     issuer_bank_type VARCHAR(20),
     issuer_risk_rating VARCHAR(20)
@@ -513,14 +504,11 @@ cursor.close()
 conn.close()
 
 #---------------------------------------------------------------------------------------------------------------
-## Ingesting the data into the dimensional model
-
-conn = pyodbc.connect(
-    f'DRIVER={{ODBC Driver 17 for SQL Server}};SERVER={server};DATABASE={'dimensional_dwh'};Trusted_Connection=yes;'
-)
+# Ingesting the data into the dimensional model
+## Function to load the df into sql
+conn = pyodbc.connect(base_conn + "DATABASE=dwh;", autocommit=True)
 cursor = conn.cursor()
 
-## Function to load the df into sql
 def load_df_to_sql(df, table_name, columns, chunksize=1000):
     placeholders = ", ".join(["?"] * len(columns))
     sql = f"INSERT INTO {table_name} ({', '.join(columns)}) VALUES ({placeholders})"
@@ -528,14 +516,19 @@ def load_df_to_sql(df, table_name, columns, chunksize=1000):
     cursor.fast_executemany = True
     total_rows = 0
 
-    # Keep only needed columns and replace pandas missing values with None
+    # Keep only needed columns and replace missing values
     df = df[columns].copy()
     df = df.replace({np.nan: None, "": None})
+
+    df = df.astype(object).where(pd.notnull(df), None)
 
     for start in range(0, len(df), chunksize):
         chunk = df.iloc[start:start + chunksize]
 
-        data = list(chunk.itertuples(index=False, name=None))
+        data = [
+            tuple(x.item() if hasattr(x, "item") else x for x in row)
+            for row in chunk.to_numpy()
+        ]
 
         cursor.executemany(sql, data)
         conn.commit()
@@ -547,7 +540,7 @@ def load_df_to_sql(df, table_name, columns, chunksize=1000):
 
 load_df_to_sql(
     df=cards_data_df,
-    table_name="cards_data_transformed",
+    table_name="transformation.cards_data",
     columns= [
         "id",
         "client_id",
@@ -569,42 +562,11 @@ load_df_to_sql(
     chunksize=1
 )
 
-
-
-# ------------------------------------------------------------------------------------------
-# Useful functions to drop table for error fixing
-## Drop table function and code, uncomment server connection if needed
-"""conn = pyodbc.connect(
-    f'DRIVER={{ODBC Driver 17 for SQL Server}};SERVER={server};DATABASE={'transformation'};Trusted_Connection=yes;'
-)
-cursor = conn.cursor()
-
-
-listed_table = ["cards_data_transformed"]
-
-def drop_all_tables(cursor, table_list):
-    for table in table_list:
-        cursor.execute(f"DROP TABLE {table}")
-        print(f"Table {table} dropped.")
-    cursor.connection.commit()
-
-drop_all_tables(cursor, listed_table)
-
-## Truncate function just to remove all data from table if needed
-listed_table = ["cards_data_transformed"]
-
-def truncate_all_tables(cursor, table_list):
-    for table in table_list:
-        cursor.execute(f"TRUNCATE TABLE {table}")
-        print(f"Table {table} truncated.")
-    cursor.connection.commit()
-    print("All tables truncated successfully!")
-
-truncate_all_tables(cursor, listed_table)
+print("Cleaning old data from all tables...")
+#cursor.execute("TRUNCATE TABLE transformation.cards_data")
+#cursor.execute("DROP TABLE transformation.cards_data")
 
 cursor.close()
 conn.close()
-
-"""
 
 
