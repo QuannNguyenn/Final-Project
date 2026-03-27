@@ -7,16 +7,15 @@ from word2number import w2n
 
 # Initializing the transformation process
 server = r'QUAN-CORNER\SQLEXPRESS01'
+base_conn = f'DRIVER={{ODBC Driver 17 for SQL Server}};SERVER={server};Trusted_Connection=yes;TrustServerCertificate=yes;'
 
-conn = pyodbc.connect(
-    f'DRIVER={{ODBC Driver 17 for SQL Server}};SERVER={server};DATABASE={'dwh'};Trusted_Connection=yes;'
-)
+conn = pyodbc.connect(base_conn + "DATABASE=dwh;", autocommit=True)
 
 cursor = conn.cursor()
 
 # importing as pandas df from sql server
 users_data_df = pd.read_sql(
-    "SELECT * FROM dbo.users_data"
+    "SELECT * FROM ingestion.users_data"
     , conn)
 
 users_data_df.head(10)
@@ -243,41 +242,26 @@ users_data_df.head(10)
 ### No issues with formatting or irregular, fine to leave as is
 
 ## Latitude and Longitude
-### Not sensititve information as its not precise (city or area level not pin point), we can leave it as is
+### Non-sensititve information as its not highly precise (city or area wide coordinates, not pin point), hence, we can leave it as is
 
 #---------------------------------------------------------------------------------------------------------------
-# Loading the transformed data into schema
-'''conn = pyodbc.connect(
-    'DRIVER={ODBC Driver 17 for SQL Server};'
-    f'SERVER={server};'
-    'DATABASE=master;'
-    'Trusted_Connection=yes;',
-    autocommit=True 
-)
-
+# Loading transformed data into transformation layer schema
+print("Connecting to dwh...")
+# We add DATABASE=DWH here
+conn = pyodbc.connect(base_conn + "DATABASE=dwh;", autocommit=True)
 cursor = conn.cursor()
 
-# Create schema database
-cursor.execute("CREATE DATABASE dimensional_dwh")
-
-cursor.close()
-conn.close()'''
-
-
-#---------------------------------------------------------------------------------------------------------------
-# Create table for insertion (Uncomment to create table if haven't)
-'''conn = pyodbc.connect(
-    'DRIVER={ODBC Driver 17 for SQL Server};'
-    f'SERVER={server};'
-    'DATABASE=dimensional_dwh;'
-    'Trusted_Connection=yes;',
-    autocommit=True 
-)
-
-cursor = conn.cursor()
+# Create Schema
+print("Checking Schema 'transformation'...")
+# Create the schema if it hasn't yet been created
+cursor.execute("""               
+IF NOT EXISTS (SELECT * FROM sys.schemas WHERE name = 'transformation')
+BEGIN
+    EXEC('CREATE SCHEMA [transformation]')
+END""")
 
 cursor.execute("""
-CREATE TABLE users_data_transformed (
+CREATE TABLE [transformation].[users_data] (
     id INT,
     current_age INT, 
     retirement_age INT, 
@@ -286,8 +270,8 @@ CREATE TABLE users_data_transformed (
     birth_month_name VARCHAR(20),
     gender VARCHAR(20),
     address VARCHAR(255),
-    latitude INT,
-    longitude INT, 
+    latitude FLOAT,
+    longitude FLOAT, 
     per_capita_income INT,
     yearly_income INT,
     total_debt INT,
@@ -299,15 +283,14 @@ CREATE TABLE users_data_transformed (
 """)
 conn.commit()
 cursor.close()
-conn.close()'''
+conn.close()
 
 #---------------------------------------------------------------------------------------------------------------
 ## Ingesting the data into the dimensional model
 
-conn = pyodbc.connect(
-    f'DRIVER={{ODBC Driver 17 for SQL Server}};SERVER={server};DATABASE={'dimensional_dwh'};Trusted_Connection=yes;'
-)
+conn = pyodbc.connect(base_conn + "DATABASE=dwh;", autocommit=True)
 cursor = conn.cursor()
+
 
 ## Function to load the df into sql
 
@@ -342,7 +325,7 @@ def load_df_to_sql(df, table_name, columns, chunksize=1000):
 
 load_df_to_sql(
     df=users_data_df,
-    table_name="users_data_transformed",
+    table_name="transformation.users_data",
     columns= [
         "id",
         "current_age",
@@ -366,40 +349,24 @@ load_df_to_sql(
 )
 
 
-
-# ------------------------------------------------------------------------------------------
-# Useful functions to drop table for error fixing
-## Drop table function and code, uncomment server connection if needed
-'''conn = pyodbc.connect(
-    f'DRIVER={{ODBC Driver 17 for SQL Server}};SERVER={server};DATABASE={'dimensional_dwh'};Trusted_Connection=yes;'
-)
-cursor = conn.cursor()
-
-
-listed_table = ["users_data_transformed"]
-
-def drop_all_tables(cursor, table_list):
-    for table in table_list:
-        cursor.execute(f"DROP TABLE {table}")
-        print(f"Table {table} dropped.")
-    cursor.connection.commit()
-
-drop_all_tables(cursor, listed_table)
-
-
-## Truncate function just to remove all data from table if needed
-listed_table = ["cards_data_transformed"]
-
-def truncate_all_tables(cursor, table_list):
-    for table in table_list:
-        cursor.execute(f"TRUNCATE TABLE {table}")
-        print(f"Table {table} truncated.")
-    cursor.connection.commit()
-    print("All tables truncated successfully!")
-
-truncate_all_tables(cursor, listed_table)
+# Drop and truncate code if needed
+##cursor.execute("TRUNCATE TABLE transformation.cards_data")
+##cursor.execute("DROP TABLE transformation.users_data")
 
 cursor.close()
 conn.close()
 
-'''
+
+text_cols = [
+    "gender",
+    "address",
+    "employment_status",
+    "education_level",
+    "birth_month_name"
+]
+
+for col in text_cols:
+    max_len = users_data_df[col].astype(str).str.len().max()
+    print(col, max_len)
+
+
