@@ -350,23 +350,9 @@ load_df_to_sql(
 
 
 # Drop and truncate code if needed
-##cursor.execute("TRUNCATE TABLE transformation.cards_data")
+##cursor.execute("TRUNCATE TABLE transformation.users_data")
 ##cursor.execute("DROP TABLE transformation.users_data")
 
 cursor.close()
 conn.close()
-
-
-text_cols = [
-    "gender",
-    "address",
-    "employment_status",
-    "education_level",
-    "birth_month_name"
-]
-
-for col in text_cols:
-    max_len = users_data_df[col].astype(str).str.len().max()
-    print(col, max_len)
-
 
