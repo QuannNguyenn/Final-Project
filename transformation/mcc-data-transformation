@@ -7,16 +7,15 @@ from word2number import w2n
 
 # Initializing the transformation process
 server = r'QUAN-CORNER\SQLEXPRESS01'
+base_conn = f'DRIVER={{ODBC Driver 17 for SQL Server}};SERVER={server};Trusted_Connection=yes;TrustServerCertificate=yes;'
 
-conn = pyodbc.connect(
-    f'DRIVER={{ODBC Driver 17 for SQL Server}};SERVER={server};DATABASE={'dwh'};Trusted_Connection=yes;'
-)
+conn = pyodbc.connect(base_conn + "DATABASE=dwh;", autocommit=True)
 
 cursor = conn.cursor()
 
 # importing as pandas df from sql server
 mcc_data_df = pd.read_sql(
-    "SELECT * FROM dbo.mcc_data"
+    "SELECT * FROM ingestion.mcc_data"
     , conn)
 
 mcc_data_df.head(10)
@@ -56,7 +55,13 @@ mcc_data_df = mcc_data_df.drop_duplicates(subset=["code"], keep="first")
 ### Also we need to address the leading spaces  
 
 def description_clean(col):
-    col = col.astype(str).str.strip().str.lower().str.title()
+    col = (
+        col.astype(str)
+        .str.replace("_", " ", regex=False)   
+        .str.strip()
+        .str.lower()
+        .str.title()
+    )
     
     # Lowercase small words
     return col.str.replace(
@@ -71,45 +76,57 @@ mcc_data_df.head(10)
 
 ## Notes
 mcc_data_df["notes"].unique()
-### For better categorization, we can convert null values to "No notes" instead of Not Available, as it can be understood that there is simply no note for this specific id, not that it is not available
-mcc_data_df["notes"] = mcc_data_df["notes"].fillna("No notes")
+### For better categorization, we can convert null values to "none" instead of not available, as it can be understood that there is simply no note for this specific id, not that it is not available
+mcc_data_df["notes"] = mcc_data_df["notes"].fillna("none")
+
 
 ## Updated by
 mcc_data_df["updated_by"].unique()
+### The updated_by column have hidden \r character that was not seen in excel or the sql server (seen when loading it into pandas df). If left as is it will lead to querying error (querying rows where name = john won't work)
 ### For better categorization, we can convert null values "unknown". It is better than not available because unknown suggests that someone updated the data, but we simply don't know who, it makes it more interpretable this way. 
-mcc_data_df["updated_by"] = mcc_data_df["updated_by"].fillna("unknown")
+mcc_data_df["updated_by"] = (
+    mcc_data_df["updated_by"]
+    .astype(str)
+    .str.replace(r"[\r\n\t]+", "", regex=True)
+    .str.strip()
+    .replace("", pd.NA)   # convert empty → NA
+    .fillna("unknown")    # fill NAs as unknown     
+)
+
 
 
 #---------------------------------------------------------------------------------------------------------------
-# Create table for insertion (Uncomment to create table if haven't)
-'''conn = pyodbc.connect(
-    'DRIVER={ODBC Driver 17 for SQL Server};'
-    f'SERVER={server};'
-    'DATABASE=dimensional_dwh;'
-    'Trusted_Connection=yes;',
-    autocommit=True 
-)
-
+# Loading transformed data into transformation layer schema
+print("Connecting to dwh...")
+# We add DATABASE=DWH here
+conn = pyodbc.connect(base_conn + "DATABASE=dwh;", autocommit=True)
 cursor = conn.cursor()
 
+# Create Schema
+print("Checking Schema 'transformation'...")
+# Create the schema if it hasn't yet been created
+cursor.execute("""               
+IF NOT EXISTS (SELECT * FROM sys.schemas WHERE name = 'transformation')
+BEGIN
+    EXEC('CREATE SCHEMA [transformation]')
+END""")
+
 cursor.execute("""
-CREATE TABLE mcc_data_transformed (
+CREATE TABLE [transformation].[mcc_data] (
     code INT,
     description VARCHAR(255),
-    notes VARCHAR(20),
-    updated_by VARCHAR(50)
+    notes VARCHAR(255),
+    updated_by VARCHAR(255)
 )
 """)
 conn.commit()
 cursor.close()
-conn.close()'''
+conn.close()
 
 
 #---------------------------------------------------------------------------------------------------------------
 ## Ingesting the data into the dimensional model
-conn = pyodbc.connect(
-    f'DRIVER={{ODBC Driver 17 for SQL Server}};SERVER={server};DATABASE={'dimensional_dwh'};Trusted_Connection=yes;'
-)
+conn = pyodbc.connect(base_conn + "DATABASE=dwh;", autocommit=True)
 cursor = conn.cursor()
 
 ## Function to load the df into sql
@@ -145,7 +162,7 @@ def load_df_to_sql(df, table_name, columns, chunksize=1000):
 
 load_df_to_sql(
     df=mcc_data_df,
-    table_name="mcc_data_transformed",
+    table_name="transformation.mcc_data",
     columns= [
         "code",
         "description",
@@ -155,39 +172,9 @@ load_df_to_sql(
     chunksize=1
 )
 
-# ------------------------------------------------------------------------------------------
-# Useful functions to drop table for error fixing
-## Drop table function and code, uncomment server connection if needed
-'''conn = pyodbc.connect(
-    f'DRIVER={{ODBC Driver 17 for SQL Server}};SERVER={server};DATABASE={'dimensional_dwh'};Trusted_Connection=yes;'
-)
-cursor = conn.cursor()
-
-
-listed_table = ["users_data_transformed"]
-
-def drop_all_tables(cursor, table_list):
-    for table in table_list:
-        cursor.execute(f"DROP TABLE {table}")
-        print(f"Table {table} dropped.")
-    cursor.connection.commit()
-
-drop_all_tables(cursor, listed_table)
-
-
-## Truncate function just to remove all data from table if needed
-listed_table = ["cards_data_transformed"]
-
-def truncate_all_tables(cursor, table_list):
-    for table in table_list:
-        cursor.execute(f"TRUNCATE TABLE {table}")
-        print(f"Table {table} truncated.")
-    cursor.connection.commit()
-    print("All tables truncated successfully!")
-
-truncate_all_tables(cursor, listed_table)
+# Drop and truncate code if needed
+##cursor.execute("TRUNCATE TABLE transformation.mcc_data")
+##cursor.execute("DROP TABLE transformation.mcc_data")
 
 cursor.close()
 conn.close()
-
-'''
