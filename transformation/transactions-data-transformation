@@ -222,10 +222,13 @@ def clean_state_and_flag(col):
     us_states = set(state_map.values())
     in_us = cleaned.isin(us_states)
     
+    # Convert to string labels FIRST
+    in_us = in_us.map({True: "True", False: "False"})
+
     # Handle missing
     in_us = in_us.astype("object")
     in_us[cleaned == "Not Available"] = "Not Available"
-    
+
     return cleaned, in_us
 
 transactions_data_df["merchant_state"], transactions_data_df["in_US"] = clean_state_and_flag(
