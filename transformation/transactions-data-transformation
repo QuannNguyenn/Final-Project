@@ -334,6 +334,7 @@ except Exception as e:
     print(f"Bulk Insert Failed: {e}")
 finally:
     # delete the temp file after loading
-    # import os
-    # os.remove(temp_csv_path) 
+    import os
+    os.remove(temp_csv_path) 
     conn.close()
+
