@@ -7,16 +7,12 @@ from word2number import w2n
 
 # Initializing the transformation process
 server = r'QUAN-CORNER\SQLEXPRESS02'
-base_conn = f'DRIVER={{ODBC Driver 17 for SQL Server}};SERVER={server};Trusted_Connection=yes;TrustServerCertificate=yes;'
-
-conn = pyodbc.connect(base_conn + "DATABASE=dwh;", autocommit=True)
-
+conn_str = f'DRIVER={{ODBC Driver 17 for SQL Server}};SERVER={server};DATABASE=dwh;Trusted_Connection=yes;TrustServerCertificate=yes;'
+conn = pyodbc.connect(conn_str, autocommit=True)
 cursor = conn.cursor()
 
 # importing as pandas df from sql server
-mcc_data_df = pd.read_sql(
-    "SELECT * FROM ingestion.mcc_data"
-    , conn)
+mcc_data_df = pd.read_sql("SELECT * FROM ingestion.mcc_data" , conn)
 
 mcc_data_df.head(10)
 
@@ -93,88 +89,48 @@ mcc_data_df["updated_by"] = (
     .fillna("unknown")    # fill NAs as unknown     
 )
 
-
+# This replaces pd.NA with standard Python None
+mcc_data_df["code"] = mcc_data_df["code"].astype(object).where(mcc_data_df["code"].notnull(), None)
 
 #---------------------------------------------------------------------------------------------------------------
 # Loading transformed data into transformation layer schema
-print("Connecting to dwh...")
-# We add DATABASE=DWH here
-conn = pyodbc.connect(base_conn + "DATABASE=dwh;", autocommit=True)
-cursor = conn.cursor()
-
-# Create Schema
-print("Checking Schema 'transformation'...")
-# Create the schema if it hasn't yet been created
-cursor.execute("""               
-IF NOT EXISTS (SELECT * FROM sys.schemas WHERE name = 'transformation')
-BEGIN
-    EXEC('CREATE SCHEMA [transformation]')
-END""")
-
 cursor.execute("""
-CREATE TABLE [transformation].[mcc_data] (
-    code INT,
-    description VARCHAR(255),
-    notes VARCHAR(255),
-    updated_by VARCHAR(255)
-)
+    IF NOT EXISTS (SELECT * FROM sys.objects WHERE object_id = OBJECT_ID('transformation.mcc_data') AND type = 'U')
+    BEGIN
+        CREATE TABLE [transformation].[mcc_data] (
+            code INT,
+            description VARCHAR(255),
+            notes VARCHAR(255),
+            updated_by VARCHAR(255)
+            )
+        END
 """)
-conn.commit()
-cursor.close()
-conn.close()
-
 
 #---------------------------------------------------------------------------------------------------------------
 ## Ingesting the data into the dimensional model
-conn = pyodbc.connect(base_conn + "DATABASE=dwh;", autocommit=True)
-cursor = conn.cursor()
 
 ## Function to load the df into sql
+cursor.execute("TRUNCATE TABLE transformation.mcc_data")
 
-def load_df_to_sql(df, table_name, columns, chunksize=1000):
-    placeholders = ", ".join(["?"] * len(columns))
-    sql = f"INSERT INTO {table_name} ({', '.join(columns)}) VALUES ({placeholders})"
+# Insert saving
+df_to_load = mcc_data_df.where(mcc_data_df.notnull(), None)
+data_list = [
+    tuple(None if pd.isna(val) else val for val in row) 
+    for row in mcc_data_df.itertuples(index=False, name=None)
+]
 
-    cursor.fast_executemany = True
-    total_rows = 0
+insert_query = """
+    INSERT INTO transformation.mcc_data
+    (code, description, notes, updated_by) 
+    VALUES (?, ?, ?, ?)
+"""
+cursor.fast_executemany = True
 
-    # Keep only needed columns and replace missing values
-    df = df[columns].copy()
-    df = df.replace({np.nan: None, "": None})
-
-    df = df.astype(object).where(pd.notnull(df), None)
-
-    for start in range(0, len(df), chunksize):
-        chunk = df.iloc[start:start + chunksize]
-
-        data = [
-            tuple(x.item() if hasattr(x, "item") else x for x in row)
-            for row in chunk.to_numpy()
-        ]
-
-        cursor.executemany(sql, data)
-        conn.commit()
-
-        total_rows += len(chunk)
-
-    print(f"Inserted {total_rows} rows into {table_name}")
+print(f"Loading {len(data_list)} rows directly...")
+cursor.executemany(insert_query, data_list)
+conn.commit()
+print("Success!") 
 
 
-load_df_to_sql(
-    df=mcc_data_df,
-    table_name="transformation.mcc_data",
-    columns= [
-        "code",
-        "description",
-        "notes",
-        "updated_by"
-    ],
-    chunksize=1
-)
 
-# Drop and truncate code if needed
-##cursor.execute("TRUNCATE TABLE transformation.mcc_data")
-##cursor.execute("DROP TABLE transformation.mcc_data")
-
-cursor.close()
 conn.close()
