@@ -1,62 +1,311 @@
 import pyodbc
 import pandas as pd
 import numpy as np
-import re
 from word2number import w2n
+import re
 
-
-# Initializing the transformation process
 server = r'QUAN-CORNER\SQLEXPRESS02'
-base_conn = f'DRIVER={{ODBC Driver 17 for SQL Server}};SERVER={server};Trusted_Connection=yes;TrustServerCertificate=yes;'
-
-conn = pyodbc.connect(base_conn + "DATABASE=dwh;", autocommit=True)
-
+conn_str = f'DRIVER={{ODBC Driver 17 for SQL Server}};SERVER={server};DATABASE=dwh;Trusted_Connection=yes;TrustServerCertificate=yes;'
+conn = pyodbc.connect(conn_str, autocommit=True)
 cursor = conn.cursor()
 
 # importing as pandas df from sql server
-transactions_data_df = pd.read_sql(
-    "SELECT * FROM ingestion.transactions_data"
-    , conn)
+cards_data_df = pd.read_sql("SELECT * FROM ingestion.cards_data", conn)
+
+# Looking for null in the table
+null_rows = cards_data_df[cards_data_df.isnull().any(axis=1)]
+print(null_rows.isnull().sum()[null_rows.isnull().sum() > 0]) 
+## 2 columns cards_brand and card_type have null values
+
+# Only card_brand and card_type have null values, replace null values with "Not Available"
+cards_data_df["card_brand"] = cards_data_df["card_brand"].fillna("Not Available")
+cards_data_df["card_type"] = cards_data_df["card_type"].fillna("Not Available")
+
+# Check again
+null_rows = cards_data_df[cards_data_df.isnull().any(axis=1)]
+print(null_rows.isnull().sum()[null_rows.isnull().sum() > 0]) 
+
+# Checking for inconsistency in formatting for text columns
+cards_data_df["card_brand"].unique()
+cards_data_df["card_type"].unique()
+cards_data_df["has_chip"].unique()
+cards_data_df["year_pin_last_changed"].unique()
+cards_data_df["card_on_dark_web"].unique()
+cards_data_df["issuer_bank_name"].unique()
+cards_data_df["issuer_bank_state"].unique()
+cards_data_df["issuer_bank_type"].unique()
+cards_data_df["issuer_risk_rating"].unique()
+
+## Columns that are found to have inconsistent formating are: card_brand, card_type, issuer_bank_name, issuer_bank_state, issuer_bank_type, and issuer_risk_rating
+
+# ------------------------------------------------------------------------
+# Cleaning the naming scheme of inconsistent columns
+## card_brand
+def clean_card_brand(col):
+    col = col.astype(str).str.strip().str.lower()
+
+    return col.replace({
+        # VISA
+        r"^v$": "Visa",
+        r"^visa.*": "Visa",
+        r"^vissa.*": "Visa",
+        r"^vvisa.*": "Visa",
+        r"^vis$": "Visa",
+        r"^v!sa.*": "Visa",
+        r"^visa-card.*": "Visa",
+
+        # MASTERCARD
+        r"^master.*card.*": "Mastercard",
+        r"^mastercard.*": "Mastercard",
+        r"^master card.*": "Mastercard",
+        r"^master\s+card.*": "Mastercard",
+
+        # AMEX
+        r"^amex.*": "Amex",
+        r"^ame\s*x.*": "Amex",
+
+        # DISCOVER
+        r"^discover.*": "Discover",
+        r"^dis\s*cover.*": "Discover",
+
+        # UNKNOWN → Not Available
+        r"^unknown$": "Not Available",
+        r"^not available$": "Not Available"
+    }, regex=True)
+
+cards_data_df["card_brand"] = clean_card_brand(cards_data_df["card_brand"])
+
+cards_data_df["card_brand"].unique()
+
+## card_type
+def clean_card_type(col):
+    col = col.astype(str).str.strip().str.lower()
+
+    return col.replace({
+        # CREDIT 
+        r"^credit.*": "Credit",
+        r"^cr.*": "Credit",
+        r"^cc$": "Credit",
+        r".*credit.*": "Credit",
+
+        # PREPAID
+        r".*pre\s*paid.*": "Prepaid",
+        r".*prepaid.*": "Prepaid",
+        r".*prepiad.*": "Prepaid",
+        r"^ppd$": "Prepaid",
+        r"^dpp$": "Prepaid",
+        r"^db-pp$": "Prepaid",
+        r"^dp$": "Prepaid",
+
+        # DEBIT
+        r"^debit.*": "Debit",
+        r"^deb.*": "Debit",
+        r"^db$": "Debit",
+        r"^d$": "Debit",
+        r".*debit.*": "Debit",
+        r".*bank debit.*": "Debit",
+
+        # UNKNOWN
+        r"^unknown$": "Not Available",
+        r"^not available$": "Not Available"
+    }, regex=True)
+
+cards_data_df["card_type"] = clean_card_type(cards_data_df["card_type"])
+
+cards_data_df["card_brand"].unique()
+
+## issuer_bank_name
+def clean_bank_name(col):
+    col = col.astype(str).str.strip().str.lower()
+
+    return col.replace({
+        # --- WELLS FARGO ---
+        r".*wells\s*fargo.*": "Wells Fargo",
+
+        # --- CITI ---
+        r"^citi.*": "Citi",
+
+        # --- CHASE ---
+        r".*jpmorgan\s*chase.*": "Chase",
+        r".*jp\s*morgan\s*chase.*": "Chase",
+        r".*chase.*": "Chase",
+
+        # --- BANK OF AMERICA ---
+        r".*bank\s*of\s*america.*": "Bank of America",
+        r".*bk\s*of\s*america.*": "Bank of America",
+
+        # --- CAPITAL ONE ---
+        r".*capital\s*one.*": "Capital One",
+
+        # --- U.S. BANK ---
+        r".*u\.?s\.?\s*bank.*": "U.S. Bank",
+        r".*u\.?s\.?\s*bk.*": "U.S. Bank",
+
+        # --- DISCOVER ---
+        r".*discover.*": "Discover",
+
+        # --- PNC ---
+        r".*pnc.*": "PNC",
+
+        # --- ALLY ---
+        r".*ally.*": "Ally",
+
+        # --- TRUIST ---
+        r".*truist.*": "Truist",
+
+        # --- UNKNOWN ---
+        r"^unknown$": "Not Available",
+        r"^not available$": "Not Available"
+    }, regex=True)
+
+cards_data_df["issuer_bank_name"] = clean_bank_name(cards_data_df["issuer_bank_name"])
+
+cards_data_df["issuer_bank_name"].unique()
+
+## Isssuer_bank_state
+def clean_state(col):
+    col = col.astype(str).str.strip().str.lower()
+
+    return col.replace({
+        # --- CALIFORNIA ---
+        r"^california$": "CA",
+        r"^ca$": "CA",
+
+        # --- NEW YORK ---
+        r"^new york$": "NY",
+        r"^ny$": "NY",
+
+        # --- NORTH CAROLINA ---
+        r"^north carolina$": "NC",
+        r"^nc$": "NC",
+
+        # --- VIRGINIA ---
+        r"^virginia$": "VA",
+        r"^va$": "VA",
+
+        # --- MINNESOTA ---
+        r"^minnesota$": "MN",
+        r"^mn$": "MN",
+
+        # --- ILLINOIS ---
+        r"^illinois$": "IL",
+        r"^il$": "IL",
+
+        # --- PENNSYLVANIA ---
+        r"^pennsylvania$": "PA",
+        r"^pa$": "PA",
+
+        # --- MICHIGAN ---
+        r"^michigan$": "MI",
+        r"^mi$": "MI"
+    }, regex=True)
+
+cards_data_df["issuer_bank_state"] = clean_state(cards_data_df["issuer_bank_state"])
+
+cards_data_df["issuer_bank_state"].unique()
+
+## Issuer bank type
+def clean_bank_type(col):
+    col = col.astype(str).str.strip().str.lower()
+
+    return col.replace({
+        # --- NATIONAL ---
+        r".*national.*": "National",
+
+        # --- REGIONAL ---
+        r".*regional.*": "Regional",
+
+        # --- ONLINE ---
+        r".*online.*": "Online",
+
+        # --- UNKNOWN (optional) ---
+        r"^unknown$": "Not Available",
+        r"^not available$": "Not Available"
+    }, regex=True)
+
+cards_data_df["issuer_bank_type"] = clean_bank_type(cards_data_df["issuer_bank_type"])
+
+cards_data_df["issuer_bank_type"].unique()
 
 
-transactions_data_df.head(10)
-len(transactions_data_df)
-# -----------------------------------------------------------------------------------------------------------
-# Transformation for numeric columns
-## Id
-duplicates = (
-    transactions_data_df[transactions_data_df["id"].duplicated(keep=False)]
-    .sort_values("id")
-)
+## Issuer risk rating
+def clean_risk_rating(col):
+    col = col.astype(str).str.strip().str.lower()
+
+    return col.replace({
+        # --- LOW ---
+        r".*low.*": "Low",
+
+        # --- MEDIUM ---
+        r".*med.*": "Medium",
+
+        # --- UNKNOWN (optional) ---
+        r"^unknown$": "Not Available",
+        r"^not available$": "Not Available"
+    }, regex=True)
+
+
+cards_data_df["issuer_risk_rating"] = clean_risk_rating(cards_data_df["issuer_risk_rating"])
+
+cards_data_df["issuer_risk_rating"].unique()
+
+
+# ------------------------------------------------------------------------
+# Fixing numeric columns
+
+## Card number 
+### Card numbers are float values, so we need to remove the decimal point as well as the digit that comes after it
+def clean_card_number(x):
+    if pd.isna(x):
+        return None
+
+    # Convert to string
+    x = str(x).strip()
+
+    # If there's a decimal → keep only part before '.'
+    if "." in x:
+        x = x.split(".")[0]
+
+    # Remove all non-digit characters
+    digits = ''.join(ch for ch in x if ch.isdigit())
+
+    return digits if digits else None
+
+cards_data_df["card_number"] = cards_data_df["card_number"].apply(clean_card_number) # Remove the decimal and digit
+
+## id
+duplicates = cards_data_df[
+    cards_data_df["id"].duplicated(keep=False)
+].sort_values("id")
+
+duplicates[["id"]]
 
 print(duplicates)
-### No id duplicates to deal with. Id can be left as it is
+priority = {"Low": 0, "Medium": 1}
 
-## date 
-nulls = (
-    transactions_data_df[transactions_data_df["date"].isna()]
+cards_data_df = (
+    cards_data_df.assign(risk_order=cards_data_df["issuer_risk_rating"].map(priority))
+    .sort_values(["id", "risk_order"])
+    .drop_duplicates(subset="id", keep="first")
+    .drop(columns="risk_order")
 )
-print(nulls)
-### the date column is in the correct formatting and there are no missing values, it can also be left as is
 
-## client_id
-nulls = (
-    transactions_data_df[transactions_data_df["client_id"].isna()]
-)
-print(nulls)
-### client_id have no missing value and is in the correct data format, we can leave it as is
 
-## card_id
-nulls = (
-    transactions_data_df[transactions_data_df["card_id"].isna()]
-)
-print(nulls)
-### card_id have no missing value and is in the correct data format, we can leave it as is
+duplicates_check = cards_data_df[
+    cards_data_df["id"].duplicated(keep=False)
+].sort_values("id")
 
-## amount
-### This column has formatting inconsistency issue similar to credit_limit or income of the other tables. We can use a similar function to address that, but instead of int it should be returned as float to accoubnt
-### the decimal points in the transaction
-def clean_amount(col):
+print(duplicates_check)
+### There are id duplicates. Upon further inspection, duplicated ids have the same client, brand, card number and cvv, indicating the same card. Because of this, we are motivated to remove the duplicated the row.
+### The suggested logic is that the row with the highest issuer risk rating to be removed.
+
+## CVV
+### In the dimensional model, there would be no use case for CVV data at all, as it does not provide analytical value, and contain highly sensitive information. Hence we are motivated to drop CVV in the transformation process
+cards_data_df = cards_data_df.drop(columns=["cvv"])
+
+## credit_limit
+
+def clean_credit_limit(col):
     s = col.astype(str).str.strip().str.lower()
 
     s = s.replace({
@@ -93,296 +342,172 @@ def clean_amount(col):
 
     result = result.abs()
 
-    # float output
-    return result.astype("Float64")
+    # force numeric again before Int64 cast
+    result = pd.to_numeric(result, errors="coerce")
 
-transactions_data_df["amount"] = clean_amount(transactions_data_df["amount"])
-transactions_data_df["amount"].head(100)
+    return result.round().astype("Int64")
 
+cards_data_df["credit_limit"] = clean_credit_limit(cards_data_df["credit_limit"])
 
-## merchant_id
-nulls = (
-    transactions_data_df[transactions_data_df["merchant_id"].isna()]
+cards_data_df['credit_limit'] = cards_data_df['credit_limit'].astype(object).where(cards_data_df['credit_limit'].notnull(), None)
+
+cards_data_df.head(20)
+
+### From the list, we can see that there are k values, error_value, limit_unknown and written number (ten thousand). We need to normalize this. For error_value and limit_unknown, it will be converted to 'Not Available',
+### and for the k values and writte number, they will be converted to their numeric form
+
+## has_chip
+cards_data_df["has_chip"].unique()
+### Since its already consistent, there is no need to transform 
+
+## year_pin_last_changed
+cards_data_df["year_pin_last_changed"].unique()
+### Since its already consistent, there is no need to transform 
+
+## card_on_dark_web
+cards_data_df["card_on_dark_web"].unique()
+### Since its already consistent, there is no need to transform 
+
+## acct_open_date
+def clean_date_flexible(col, allow_future=True, reference_year=2026):
+    original = col.copy()
+    s = col.astype(str).str.strip()
+
+    missing_values = {"not available", "unknown", "none", "null", "", "nan"}
+    s = s.mask(s.str.lower().isin(missing_values), pd.NA)
+
+    def parse_value(val):
+        if pd.isna(val):
+            return pd.NaT
+
+        v = str(val).strip()
+
+        # 1) Month-Year text format like Sep-02
+        m_mon_yy = re.fullmatch(r"([A-Za-z]{3})-(\d{2})", v)
+        if m_mon_yy:
+            mon = m_mon_yy.group(1)
+            yy = int(m_mon_yy.group(2))
+            year = 2000 + yy if yy <= 26 else 1900 + yy
+            return pd.to_datetime(f"01-{mon}-{year}", format="%d-%b-%Y", errors="coerce")
+
+        # 2) Expiry format like 04/24 or 4/24
+        m_mm_yy = re.fullmatch(r"(\d{1,2})/(\d{2})", v)
+        if m_mm_yy:
+            mm = int(m_mm_yy.group(1))
+            yy = int(m_mm_yy.group(2))
+            year = 2000 + yy if yy <= 26 else 1900 + yy
+            if 1 <= mm <= 12:
+                return pd.Timestamp(year=year, month=mm, day=1)
+            return pd.NaT
+
+        # 3) Day-Month format like 6-Jan
+        m_day_mon = re.fullmatch(r"(\d{1,2})-([A-Za-z]{3})", v)
+        if m_day_mon:
+            return pd.to_datetime(f"{v}-{reference_year}", format="%d-%b-%Y", errors="coerce")
+
+        # 4) Full numeric date like 01-01-98
+        m_dd_mm_yy = re.fullmatch(r"(\d{2})-(\d{2})-(\d{2})", v)
+        if m_dd_mm_yy:
+            dd = int(m_dd_mm_yy.group(1))
+            mm = int(m_dd_mm_yy.group(2))
+            yy = int(m_dd_mm_yy.group(3))
+            year = 2000 + yy if yy <= 26 else 1900 + yy
+            try:
+                return pd.Timestamp(year=year, month=mm, day=dd)
+            except ValueError:
+                return pd.NaT
+
+        # 5) ISO / full normal dates as fallback
+        parsed = pd.to_datetime(v, errors='coerce', dayfirst=False)
+        if pd.notna(parsed):
+            return parsed
+
+        return pd.NaT
+
+    parsed = s.apply(parse_value)
+
+    if not allow_future:
+        today = pd.Timestamp.today().normalize()
+        parsed = parsed.where(parsed <= today, pd.NaT)
+
+    invalid_mask = parsed.isna() & s.notna()
+    invalid_vals = original[invalid_mask].unique()
+
+    return parsed, invalid_vals
+
+cards_data_df["acct_open_date"], inv_acct = clean_date_flexible(
+    cards_data_df["acct_open_date"], allow_future=False
 )
-print(nulls)
-### merchant_id have no missing value and is in the correct data format, we can leave it as is
+### acct_open_date has a lot of formatting inconsistency. The function adressed all of those inconsistencies by converting the 4 cases into the standardized date format (refer to function above)
+### future dates for acct_open_date doesn't make any sense, so along with unknown or not available rows, they are converted to NaT (The choice for this is that there is no analytical value in categorizing
+### Not Available, and it makes it easier to ingest the data back into SQL)
 
-## merchant_city
-transactions_data_df["merchant_city"].unique()
 
-nulls = (
-    transactions_data_df[transactions_data_df["merchant_city"].isna()]
-)
-print(nulls)
-
-### Merchant city does not have missing values, though to make the data format consistent, we can set that every word to only have the first letter capitalized and also filter possible leading or extra spaces 
-### This cleaning should convert things like ONLINE to Online to make it consistent as well
-def clean_city(col):
-    return (
-        col.astype(str)
-        .str.strip()
-        .str.replace(r"\s+", " ", regex=True)  # fix multiple spaces
-        .str.lower()
-        .str.title()
-    )
-
-transactions_data_df["merchant_city"] = clean_city(transactions_data_df["merchant_city"])
-transactions_data_df["merchant_city"].head(100) # Check
-
-## merchant_state
-### merchant_state have missing values, for those cases, it is logical to make the missing rows as "Not Available"
-### States are written as state code, we need to check if that is consistent
-transactions_data_df["merchant_state"].unique()
-
-### Aside from US states, we have other countries that are written in full. To make it consistent, we can map the statecodes into full state name, and also create a new column for data enrichment to easily filter rows
-### that are inside or outside the U.S
-state_map = {
-    "AL": "Alabama",
-    "AK": "Alaska",
-    "AZ": "Arizona",
-    "AR": "Arkansas",
-    "CA": "California",
-    "CO": "Colorado",
-    "CT": "Connecticut",
-    "DE": "Delaware",
-    "FL": "Florida",
-    "GA": "Georgia",
-    "HI": "Hawaii",
-    "ID": "Idaho",
-    "IL": "Illinois",
-    "IN": "Indiana",
-    "IA": "Iowa",
-    "KS": "Kansas",
-    "KY": "Kentucky",
-    "LA": "Louisiana",
-    "ME": "Maine",
-    "MD": "Maryland",
-    "MA": "Massachusetts",
-    "MI": "Michigan",
-    "MN": "Minnesota",
-    "MS": "Mississippi",
-    "MO": "Missouri",
-    "MT": "Montana",
-    "NE": "Nebraska",
-    "NV": "Nevada",
-    "NH": "New Hampshire",
-    "NJ": "New Jersey",
-    "NM": "New Mexico",
-    "NY": "New York",
-    "NC": "North Carolina",
-    "ND": "North Dakota",
-    "OH": "Ohio",
-    "OK": "Oklahoma",
-    "OR": "Oregon",
-    "PA": "Pennsylvania",
-    "RI": "Rhode Island",
-    "SC": "South Carolina",
-    "SD": "South Dakota",
-    "TN": "Tennessee",
-    "TX": "Texas",
-    "UT": "Utah",
-    "VT": "Vermont",
-    "VA": "Virginia",
-    "WA": "Washington",
-    "WV": "West Virginia",
-    "WI": "Wisconsin",
-    "WY": "Wyoming"
-}
-
-def clean_state_and_flag(col):
-    col = (
-        col.astype(str)
-        .str.strip()
-        .str.replace(r"\s+", " ", regex=True)
-    )
-    
-    col = col.replace({"nan": pd.NA, "": pd.NA})
-    
-    # Normalize casing for matching
-    upper_col = col.str.upper()
-    
-    # Map only state codes
-    mapped = upper_col.map(state_map)
-    
-    # If not a code, keep original value
-    mapped = mapped.fillna(col)
-    
-    # Standardize to title case
-    cleaned = (
-        mapped.astype(str)
-        .str.strip()
-        .str.title()
-        .replace("Nan", pd.NA)
-        .fillna("Not Available")
-    )
-    
-    # Identify US states
-    us_states = set(state_map.values())
-    in_us = cleaned.isin(us_states)
-    
-    # Convert to string labels FIRST
-    in_us = in_us.map({True: "True", False: "False"})
-
-    # Handle missing
-    in_us = in_us.astype("object")
-    in_us[cleaned == "Not Available"] = "Not Available"
-
-    return cleaned, in_us
-
-transactions_data_df["merchant_state"], transactions_data_df["in_US"] = clean_state_and_flag(
-    transactions_data_df["merchant_state"]
+## expires
+cards_data_df["expires"], inv_exp = clean_date_flexible(
+    cards_data_df["expires"], allow_future=True
 )
 
-transactions_data_df.head(100) # Check
+### Used the same function as acct_open_date, though its formatting is way cleaner where it only have the month - year format
+cards_data_df.head(10)
 
-## Zip
-nulls = (
-    transactions_data_df[transactions_data_df["zip"].isna()]
-)
-print(nulls[:10])
-### For null values in zip, we can make it as not available as it can be useful for analytical processes (looking into transaction details of unknown origins)
-transactions_data_df["zip"] = (
-    pd.to_numeric(transactions_data_df["zip"], errors="coerce")
-    .astype("Int64")                 # remove decimals safely
-    .astype("string")                # convert to string
-)
-transactions_data_df["zip"] = transactions_data_df["zip"].fillna("Not Available")
-
-transactions_data_df.head(100)
-
-## Mcc 
-nulls = (
-    transactions_data_df[transactions_data_df["mcc"].isna()]
-)
-print(nulls[:10])
-### There are null values for the mcc code, and its formatting is correct so it is fine to leave as is
-
-## Used chip
-transactions_data_df["use_chip"].unique()
-### There are no null values and the formatting is consistent, we can leave it as is
-
-## Errors
-transactions_data_df["errors"].unique()
-### In some rows, we have multiple reasons, which can be a concern. However, exploding the row to accomodate for individual reasons for an id would lead to other problems by itself (trouble aggregating over the
-### data). Also, with this current formating, it can still be queried without much difficulty (in SQL for example we can use WHERE errors LIKE '%Insufficient Balance%'). Hence, we believe the structure can be kept this way
-### Aside from that, null should be converted to "No Errors" which will be useful for analytical grouping and aggregating.
-
-transactions_data_df["errors"] = (
-    transactions_data_df["errors"]
-    .replace("", pd.NA)
-    .fillna("No Errors")
-)
-
-transactions_data_df["errors"].unique() # Check
-transactions_data_df.head(100)
-
-len(transactions_data_df)
-
+cards_data_df["acct_open_date"] = cards_data_df["acct_open_date"].where(cards_data_df["acct_open_date"].notna(), None)
+cards_data_df["expires"] = cards_data_df["expires"].where(cards_data_df["expires"].notna(), None)
 
 #---------------------------------------------------------------------------------------------------------------
 # Loading transformed data into transformation layer schema
-print("Connecting to dwh...")
-# We add DATABASE=DWH here
-conn = pyodbc.connect(base_conn + "DATABASE=dwh;", autocommit=True)
-cursor = conn.cursor()
-
-# Create Schema
-print("Checking Schema 'transformation'...")
-# Create the schema if it hasn't yet been created
-cursor.execute("""               
-IF NOT EXISTS (SELECT * FROM sys.schemas WHERE name = 'transformation')
-BEGIN
-    EXEC('CREATE SCHEMA [transformation]')
-END""")
-
 cursor.execute("""
-CREATE TABLE [transformation].[transactions_data] (
-    id INT,
-    date DATETIME,
-    client_id INT,
-    card_id INT, 
-    amount FLOAT, 
-    use_chip VARCHAR(50),
-    merchant_id INT, 
-    merchant_city VARCHAR(50),
-    merchant_state VARCHAR(255),
-    zip VARCHAR(50),
-    mcc INT,
-    errors VARCHAR(255),
-    in_US VARCHAR(20)
-)
+    IF NOT EXISTS (SELECT * FROM sys.objects WHERE object_id = OBJECT_ID('transformation.cards_data') AND type = 'U')
+    BEGIN
+        CREATE TABLE [transformation].[cards_data] (
+            id INT,
+            client_id INT,
+            card_brand VARCHAR(255),
+            card_type VARCHAR(255),
+            card_number VARCHAR(20),
+            expires DATE,
+            has_chip VARCHAR(10),
+            num_cards_issued INT,
+            credit_limit INT,
+            acct_open_date DATE,
+            year_pin_last_changed INT,
+            card_on_dark_web VARCHAR(10),
+            issuer_bank_name VARCHAR(255),
+            issuer_bank_state VARCHAR(20),
+            issuer_bank_type VARCHAR(20),
+            issuer_risk_rating VARCHAR(20)
+            )   
+        END
 """)
-conn.commit()
-cursor.close()
-conn.close()
-
 
 #---------------------------------------------------------------------------------------------------------------
-## Ingesting the data into the dimensional model
-conn = pyodbc.connect(
-    f'DRIVER={{ODBC Driver 17 for SQL Server}};SERVER={server};DATABASE={'dwh'};Trusted_Connection=yes;'
-)
-cursor = conn.cursor()
-
+# Ingesting the data into the dimensional model
 ## Function to load the df into sql
+cursor.execute("TRUNCATE TABLE transformation.cards_data")
 
-def load_df_to_sql(df, table_name, columns, chunksize=1000):
-    placeholders = ", ".join(["?"] * len(columns))
-    sql = f"INSERT INTO {table_name} ({', '.join(columns)}) VALUES ({placeholders})"
+# Insert saving
+df_to_load = cards_data_df.where(cards_data_df.notnull(), None)
+data_list = [
+    tuple(None if pd.isna(val) else val for val in row) 
+    for row in cards_data_df.itertuples(index=False, name=None)
+]
 
-    cursor.fast_executemany = True
-    total_rows = 0
+insert_query = """
+    INSERT INTO transformation.cards_data
+    (id, client_id, card_brand, card_type, card_number, expires, has_chip, num_cards_issued, credit_limit, acct_open_date, year_pin_last_changed, card_on_dark_web, issuer_bank_name, issuer_bank_state, issuer_bank_type,issuer_risk_rating) 
+    VALUES (?, ?, ?, ?,?, ?, ?, ?,?, ?, ?, ?,?, ?, ?, ?)
+"""
+cursor.fast_executemany = True
 
-    # Keep only needed columns and replace missing values
-    df = df[columns].copy()
-    df = df.replace({np.nan: None, "": None})
-
-    df = df.astype(object).where(pd.notnull(df), None)
-
-    for start in range(0, len(df), chunksize):
-        chunk = df.iloc[start:start + chunksize]
-
-        data = [
-            tuple(x.item() if hasattr(x, "item") else x for x in row)
-            for row in chunk.to_numpy()
-        ]
-
-        cursor.executemany(sql, data)
-        conn.commit()
-
-        total_rows += len(chunk)
-
-    print(f"Inserted {total_rows} rows into {table_name}")
+print(f"Loading {len(data_list)} rows directly...")
+cursor.executemany(insert_query, data_list)
+conn.commit()
+print("Success!") 
 
 
-load_df_to_sql(
-    df=transactions_data_df,
-    table_name="transformation.transactions_data",
-    columns = [
-    "id",
-    "date",
-    "client_id",
-    "card_id",
-    "amount",
-    "use_chip",
-    "merchant_id",
-    "merchant_city",
-    "merchant_state",
-    "zip",
-    "mcc",
-    "errors",
-    "in_US"
-],
-    chunksize=1000
-)
 
-# Drop and truncate code if needed
-'''cursor.execute("TRUNCATE TABLE transformation.transactions_data")
-cursor.execute("DROP TABLE transformation.transactions_data")'''
-
-cursor.close()
 conn.close()
 
 
-
-
+print(cards_data_df[["expires", "acct_open_date"]].head(20))
+print(cards_data_df[["expires", "acct_open_date"]].dtypes)
