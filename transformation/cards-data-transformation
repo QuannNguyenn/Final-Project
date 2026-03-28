@@ -507,7 +507,3 @@ print("Success!")
 
 
 conn.close()
-
-
-print(cards_data_df[["expires", "acct_open_date"]].head(20))
-print(cards_data_df[["expires", "acct_open_date"]].dtypes)
