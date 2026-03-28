@@ -4,7 +4,7 @@ import numpy as np
 from word2number import w2n
 import re
 
-server = r'QUAN-CORNER\SQLEXPRESS01'
+server = r'QUAN-CORNER\SQLEXPRESS02'
 base_conn = f'DRIVER={{ODBC Driver 17 for SQL Server}};SERVER={server};Trusted_Connection=yes;TrustServerCertificate=yes;'
 
 conn = pyodbc.connect(base_conn + "DATABASE=dwh;", autocommit=True)
@@ -473,11 +473,7 @@ cursor = conn.cursor()
 # Create Schema
 print("Checking Schema 'transformation'...")
 # Create the schema if it hasn't yet been created
-cursor.execute("""               
-IF NOT EXISTS (SELECT * FROM sys.schemas WHERE name = 'transformation')
-BEGIN
-    EXEC('CREATE SCHEMA [transformation]')
-END""")
+
 
 cursor.execute("""
 CREATE TABLE [transformation].[cards_data] (
@@ -562,9 +558,9 @@ load_df_to_sql(
     chunksize=1
 )
 
-print("Cleaning old data from all tables...")
-#cursor.execute("TRUNCATE TABLE transformation.cards_data")
-#cursor.execute("DROP TABLE transformation.cards_data")
+# Drop and truncate code if needed
+'''cursor.execute("TRUNCATE TABLE transformation.cards_data")
+cursor.execute("DROP TABLE transformation.cards_data")'''
 
 cursor.close()
 conn.close()
