@@ -181,7 +181,8 @@ state_map = {
     "WA": "Washington",
     "WV": "West Virginia",
     "WI": "Wisconsin",
-    "WY": "Wyoming"
+    "WY": "Wyoming",
+    "DC": "District of Columbia"
 }
 
 def clean_state_and_flag(col):
@@ -193,16 +194,16 @@ def clean_state_and_flag(col):
     
     col = col.replace({"nan": pd.NA, "": pd.NA})
     
-    # Normalize casing for matching
-    upper_col = col.str.upper()
+    # Normalize casing
+    upper_col = col.str.strip().str.upper()
     
-    # Map only state codes
+    # Map state codes
     mapped = upper_col.map(state_map)
     
-    # If not a code, keep original value
+    # If not mapped, keep original cleaned value
     mapped = mapped.fillna(col)
     
-    # Standardize to title case
+    # Standardize formatting
     cleaned = (
         mapped.astype(str)
         .str.strip()
@@ -211,24 +212,24 @@ def clean_state_and_flag(col):
         .fillna("Not Available")
     )
     
-    # Identify US states
-    us_states = set(state_map.values())
+    # US detection
+    us_states = {v.title() for v in state_map.values()}
     in_us = cleaned.isin(us_states)
     
-    # Convert to string labels FIRST
     in_us = in_us.map({True: "True", False: "False"})
-
-    # Handle missing
     in_us = in_us.astype("object")
     in_us[cleaned == "Not Available"] = "Not Available"
 
     return cleaned, in_us
+
 
 transactions_data_df["merchant_state"], transactions_data_df["in_US"] = clean_state_and_flag(
     transactions_data_df["merchant_state"]
 )
 
 transactions_data_df.head(100) # Check
+
+
 
 ## Zip
 # nulls = (
