@@ -6,7 +6,7 @@ from word2number import w2n
 
 
 # Initializing the transformation process
-server = r'QUAN-CORNER\SQLEXPRESS01'
+server = r'QUAN-CORNER\SQLEXPRESS02'
 base_conn = f'DRIVER={{ODBC Driver 17 for SQL Server}};SERVER={server};Trusted_Connection=yes;TrustServerCertificate=yes;'
 
 conn = pyodbc.connect(base_conn + "DATABASE=dwh;", autocommit=True)
