@@ -7,16 +7,12 @@ from word2number import w2n
 
 # Initializing the transformation process
 server = r'QUAN-CORNER\SQLEXPRESS02'
-base_conn = f'DRIVER={{ODBC Driver 17 for SQL Server}};SERVER={server};Trusted_Connection=yes;TrustServerCertificate=yes;'
-
-conn = pyodbc.connect(base_conn + "DATABASE=dwh;", autocommit=True)
-
+conn_str = f'DRIVER={{ODBC Driver 17 for SQL Server}};SERVER={server};DATABASE=dwh;Trusted_Connection=yes;TrustServerCertificate=yes;'
+conn = pyodbc.connect(conn_str, autocommit=True)
 cursor = conn.cursor()
 
 # importing as pandas df from sql server
-users_data_df = pd.read_sql(
-    "SELECT * FROM ingestion.users_data"
-    , conn)
+users_data_df = pd.read_sql( "SELECT * FROM ingestion.users_data", conn)
 
 users_data_df.head(10)
 
@@ -220,19 +216,19 @@ def clean_income(col):
     return result.round().astype("Int64")
 
 users_data_df["per_capita_income"] = clean_income(users_data_df["per_capita_income"])
-
+users_data_df["per_capita_income"] = users_data_df["per_capita_income"].astype(object).where(users_data_df["per_capita_income"].notnull(), None)
 users_data_df.head(10)
 
 ## Yearly income
 ### Similar issue with per capita income, perform the same transformation
 users_data_df["yearly_income"] = clean_income(users_data_df["yearly_income"])
-
+users_data_df["yearly_income"] = users_data_df["yearly_income"].astype(object).where(users_data_df["yearly_income"].notnull(), None)
 users_data_df.head(10)
 
 ## Total debt
 ### Similar issue with per capita income and yearly income, perform the same transformation
 users_data_df["total_debt"] = clean_income(users_data_df["total_debt"])
-
+users_data_df["total_debt"] = users_data_df["total_debt"].astype(object).where(users_data_df["total_debt"].notnull(), None)
 users_data_df.head(10)
 
 ## Credit score
@@ -246,108 +242,55 @@ users_data_df.head(10)
 
 #---------------------------------------------------------------------------------------------------------------
 # Loading transformed data into transformation layer schema
-print("Connecting to dwh...")
-# We add DATABASE=DWH here
-conn = pyodbc.connect(base_conn + "DATABASE=dwh;", autocommit=True)
-cursor = conn.cursor()
-
-# Create Schema
-print("Checking Schema 'transformation'...")
-# Create the schema if it hasn't yet been created
-
 cursor.execute("""
-CREATE TABLE [transformation].[users_data] (
-    id INT,
-    current_age INT, 
-    retirement_age INT, 
-    birth_year INT,
-    birth_month INT,
-    birth_month_name VARCHAR(20),
-    gender VARCHAR(20),
-    address VARCHAR(255),
-    latitude FLOAT,
-    longitude FLOAT, 
-    per_capita_income INT,
-    yearly_income INT,
-    total_debt INT,
-    credit_score INT,
-    num_credit_cards INT,
-    employment_status VARCHAR(20),
-    education_level VARCHAR(20)
-)
+    IF NOT EXISTS (SELECT * FROM sys.objects WHERE object_id = OBJECT_ID('transformation.users_data') AND type = 'U')
+        BEGIN
+            CREATE TABLE [transformation].[users_data] (
+                id INT,
+                current_age INT, 
+                retirement_age INT, 
+                birth_year INT,
+                birth_month INT,
+                birth_month_name VARCHAR(20),
+                gender VARCHAR(20),
+                address VARCHAR(255),
+                latitude FLOAT,
+                longitude FLOAT, 
+                per_capita_income INT,
+                yearly_income INT,
+                total_debt INT,
+                credit_score INT,
+                num_credit_cards INT,
+                employment_status VARCHAR(20),
+                education_level VARCHAR(20)
+               )
+               END
 """)
-conn.commit()
-cursor.close()
-conn.close()
 
 #---------------------------------------------------------------------------------------------------------------
 ## Ingesting the data into the dimensional model
 
-conn = pyodbc.connect(base_conn + "DATABASE=dwh;", autocommit=True)
-cursor = conn.cursor()
+cursor.execute("TRUNCATE TABLE transformation.users_data")
+
+# Insert saving
+df_to_load = users_data_df.where(users_data_df.notnull(), None)
+data_list = [
+    tuple(None if pd.isna(val) else val for val in row) 
+    for row in users_data_df.itertuples(index=False, name=None)
+]
+
+insert_query = """
+    INSERT INTO transformation.users_data
+    (id, current_age, retirement_age, birth_year, birth_month, birth_month_name,gender,address,latitude, longitude,per_capita_income,yearly_income, total_debt, credit_score, num_credit_cards, employment_status, education_level) 
+    VALUES (?, ?, ?, ?,?, ?, ?, ?,?, ?, ?, ?,?, ?, ?, ?,?)
+"""
+cursor.fast_executemany = True
+
+print(f"Loading {len(data_list)} rows directly...")
+cursor.executemany(insert_query, data_list)
+conn.commit()
+print("Success!") 
 
 
-## Function to load the df into sql
 
-def load_df_to_sql(df, table_name, columns, chunksize=1000):
-    placeholders = ", ".join(["?"] * len(columns))
-    sql = f"INSERT INTO {table_name} ({', '.join(columns)}) VALUES ({placeholders})"
-
-    cursor.fast_executemany = True
-    total_rows = 0
-
-    # Keep only needed columns and replace missing values
-    df = df[columns].copy()
-    df = df.replace({np.nan: None, "": None})
-
-    df = df.astype(object).where(pd.notnull(df), None)
-
-    for start in range(0, len(df), chunksize):
-        chunk = df.iloc[start:start + chunksize]
-
-        data = [
-            tuple(x.item() if hasattr(x, "item") else x for x in row)
-            for row in chunk.to_numpy()
-        ]
-
-        cursor.executemany(sql, data)
-        conn.commit()
-
-        total_rows += len(chunk)
-
-    print(f"Inserted {total_rows} rows into {table_name}")
-
-
-load_df_to_sql(
-    df=users_data_df,
-    table_name="transformation.users_data",
-    columns= [
-        "id",
-        "current_age",
-        "retirement_age",
-        "birth_year",
-        "birth_month",
-        "birth_month_name",
-        "gender",
-        "address",
-        "latitude",
-        "longitude",
-        "per_capita_income",
-        "yearly_income",
-        "total_debt",
-        "credit_score",
-        "num_credit_cards",
-        "employment_status",
-        "education_level"
-    ],
-    chunksize=1
-)
-
-
-# Drop and truncate code if needed
-##cursor.execute("TRUNCATE TABLE transformation.users_data")
-##cursor.execute("DROP TABLE transformation.users_data")
-
-cursor.close()
 conn.close()
-
