@@ -130,8 +130,6 @@ cursor.execute("""
 #----------------------------------------------------------------------------------------
 # ADD FOREIGN KEYS
 
-## This tells SQL how the tables relate to each other.
-
 cursor.execute("""
     ALTER TABLE merchant_marts.fact_transactions
     ADD CONSTRAINT FK_MART_DATE FOREIGN KEY (date_key)
