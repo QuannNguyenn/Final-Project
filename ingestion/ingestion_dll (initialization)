@@ -49,18 +49,18 @@ cursor.execute("""
         IF NOT EXISTS (SELECT * FROM sys.objects WHERE object_id = OBJECT_ID('ingestion.transactions_data') AND type = 'U')
         BEGIN
             CREATE TABLE [ingestion].[transactions_data] (
-                id NVARCHAR(50),
-                date NVARCHAR(50),
-                client_id NVARCHAR(50),
-                card_id NVARCHAR(50), 
-                amount NVARCHAR(50), 
-                use_chip NVARCHAR(50),
-                merchant_id NVARCHAR(50), 
-                merchant_city NVARCHAR(50),
-                merchant_state NVARCHAR(50),
-                zip NVARCHAR(50),
-                mcc NVARCHAR(50),
-                errors NVARCHAR(50)
+                id NVARCHAR(255),
+                date NVARCHAR(255),
+                client_id NVARCHAR(255),
+                card_id NVARCHAR(255), 
+                amount NVARCHAR(255), 
+                use_chip NVARCHAR(255),
+                merchant_id NVARCHAR(255), 
+                merchant_city NVARCHAR(255),
+                merchant_state NVARCHAR(255),
+                zip NVARCHAR(255),
+                mcc NVARCHAR(255),
+                errors NVARCHAR(255)
             )   
         END
     """)
@@ -71,22 +71,22 @@ cursor.execute("""
         IF NOT EXISTS (SELECT * FROM sys.objects WHERE object_id = OBJECT_ID('ingestion.users_data') AND type = 'U')
         BEGIN
             CREATE TABLE [ingestion].[users_data] (
-                id NVARCHAR(50),
-                current_age NVARCHAR(50), 
-                retirement_age NVARCHAR(50), 
-                birth_year NVARCHAR(50),
-                birth_month NVARCHAR(50),
-                gender NVARCHAR(50),
-                address NVARCHAR(50),
-                latitude NVARCHAR(50),
-                longitude NVARCHAR(50), 
-                per_capita_income NVARCHAR(50),
-                yearly_income NVARCHAR(50),
-                total_debt NVARCHAR(50),
-                credit_score NVARCHAR(50),
-                num_credit_cards NVARCHAR(50),
-                employment_status NVARCHAR(50),
-                education_level NVARCHAR(50)
+                id NVARCHAR(255),
+                current_age NVARCHAR(255), 
+                retirement_age NVARCHAR(255), 
+                birth_year NVARCHAR(255),
+                birth_month NVARCHAR(255),
+                gender NVARCHAR(255),
+                address NVARCHAR(255),
+                latitude NVARCHAR(255),
+                longitude NVARCHAR(255), 
+                per_capita_income NVARCHAR(255),
+                yearly_income NVARCHAR(255),
+                total_debt NVARCHAR(255),
+                credit_score NVARCHAR(255),
+                num_credit_cards NVARCHAR(255),
+                employment_status NVARCHAR(255),
+                education_level NVARCHAR(255)
             )
         END
     """)
@@ -97,23 +97,23 @@ cursor.execute("""
         IF NOT EXISTS (SELECT * FROM sys.objects WHERE object_id = OBJECT_ID('ingestion.cards_data') AND type = 'U')
         BEGIN
             CREATE TABLE [ingestion].[cards_data] (
-                id NVARCHAR(50),
-                client_id NVARCHAR(50),
-                card_brand NVARCHAR(50),
-                card_type NVARCHAR(50),
-                card_number NVARCHAR(50),
-                expires NVARCHAR(50),
-                cvv NVARCHAR(50),
-                has_chip NVARCHAR(50),
-                num_cards_issued NVARCHAR(50),
-                credit_limit NVARCHAR(50),
-                acct_open_date NVARCHAR(50),
-                year_pin_last_changed NVARCHAR(50),
-                card_on_dark_web NVARCHAR(50),
-                issuer_bank_name NVARCHAR(50),
-                issuer_bank_state NVARCHAR(50),
-                issuer_bank_type NVARCHAR(50),
-                issuer_risk_rating NVARCHAR(50)
+                id NVARCHAR(255),
+                client_id NVARCHAR(255),
+                card_brand NVARCHAR(255),
+                card_type NVARCHAR(255),
+                card_number NVARCHAR(255),
+                expires NVARCHAR(255),
+                cvv NVARCHAR(255),
+                has_chip NVARCHAR(255),
+                num_cards_issued NVARCHAR(255),
+                credit_limit NVARCHAR(255),
+                acct_open_date NVARCHAR(255),
+                year_pin_last_changed NVARCHAR(255),
+                card_on_dark_web NVARCHAR(255),
+                issuer_bank_name NVARCHAR(255),
+                issuer_bank_state NVARCHAR(255),
+                issuer_bank_type NVARCHAR(255),
+                issuer_risk_rating NVARCHAR(255)
             )
         END
     """)
@@ -124,10 +124,10 @@ cursor.execute("""
         IF NOT EXISTS (SELECT * FROM sys.objects WHERE object_id = OBJECT_ID('ingestion.mcc_data') AND type = 'U')
         BEGIN
             CREATE TABLE [ingestion].[mcc_data] (
-                code NVARCHAR(50),
-                description NVARCHAR(50),
-                notes NVARCHAR(50),
-                updated_by NVARCHAR(50)
+                code NVARCHAR(255),
+                description NVARCHAR(255),
+                notes NVARCHAR(255),
+                updated_by NVARCHAR(255)
             )
         END
     """)
