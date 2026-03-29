@@ -1,257 +1,138 @@
 import pyodbc
-import pandas as pd
-import numpy as np
 
+# Setup BASE connection
+server = r'QUAN-CORNER\SQLEXPRESS02'
+base_conn = f'DRIVER={{ODBC Driver 17 for SQL Server}};SERVER={server};Trusted_Connection=yes;TrustServerCertificate=yes;'
 
-server = r'QUAN-CORNER\SQLEXPRESS01'
-
-# Creating the data warehouse
-connection = pyodbc.connect(
-    'DRIVER={ODBC Driver 17 for SQL Server};'
-    f'SERVER={server};'
-    'DATABASE=master;'
-    'Trusted_Connection=yes;',
-    autocommit=True 
-)
-
-cursor = connection.cursor()
-
-# Create database
-cursor.execute("CREATE DATABASE dwh")
-
-
-cursor.close()
-connection.close()
-
-# -------------------------------------------------------------------------------------------------------------
-# Creating the corresponding tables in the server
-##  Connect to the newly created database
-connection = pyodbc.connect(
-    'DRIVER={ODBC Driver 17 for SQL Server};'
-    f'SERVER={server};'
-    'DATABASE=dwh;'
-    'Trusted_Connection=yes;',
-    autocommit=True
-)
-
-cursor = connection.cursor()
-
-## Table creation
-tables = [
-    """CREATE TABLE transactions_data (
-        id INT,
-        date DATETIME,
-        client_id INT,
-        card_id INT, 
-        amount VARCHAR(50), 
-        use_chip VARCHAR(50),
-        merchant_id INT, 
-        merchant_city VARCHAR(50),
-        merchant_state VARCHAR(50),
-        zip VARCHAR(20),
-        mcc INT,
-        errors VARCHAR(255)
-    )""",
-    """CREATE TABLE users_data (
-        id INT,
-        current_age INT, 
-        retirement_age INT, 
-        birth_year INT,
-        birth_month INT,
-        gender VARCHAR(20),
-        address VARCHAR(255),
-        latitude INT,
-        longitude INT, 
-        per_capita_income VARCHAR(10),
-        yearly_income VARCHAR(10),
-        total_debt VARCHAR(10),
-        credit_score INT,
-        num_credit_cards INT,
-        employment_status VARCHAR(20),
-        education_level VARCHAR(20)
-    )""",
-    """CREATE TABLE cards_data (
-        id INT,
-        client_id INT,
-        card_brand VARCHAR(20),
-        card_type VARCHAR(20),
-        card_number VARCHAR(20),
-        expires VARCHAR(20),
-        cvv INT,
-        has_chip VARCHAR(10),
-        num_cards_issued INT,
-        credit_limit VARCHAR(20),
-        acct_open_date VARCHAR(20),
-        year_pin_last_changed INT,
-        card_on_dark_web VARCHAR(10),
-        issuer_bank_name VARCHAR(50),
-        issuer_bank_state VARCHAR(20),
-        issuer_bank_type VARCHAR(20),
-        issuer_risk_rating VARCHAR(20)
-    )""",
-    """CREATE TABLE mcc_data (
-        code VARCHAR(20),
-        description VARCHAR(200),
-        notes VARCHAR(20),
-        updated_by VARCHAR(50)
-    )"""
-]
-
-for stmt in tables:
-    cursor.execute(stmt)
-connection.commit()
-
-cursor.close()
-connection.close()
-
-# -------------------------------------------------------------------------------------------------------------
-# Ingesting the data from csv files into the tables inside the warehouse
-
-## Establish connection
-database = 'dwh'
-conn = pyodbc.connect(
-    f'DRIVER={{ODBC Driver 17 for SQL Server}};SERVER={server};DATABASE={'dwh'};Trusted_Connection=yes;'
-)
+# STEP 1: CREATE DATABASE (Connect to 'master')
+print("Checking Database...")
+# We add DATABASE=master just for this step in order to create a new data warehouse
+conn = pyodbc.connect(base_conn + "DATABASE=master;", autocommit=True)
 cursor = conn.cursor()
 
-## Function to load a csv file into sql server database
-def load_csv_to_sql(file_path, table_name, columns, sep=',', chunksize=1000):
-    placeholders = ", ".join(["?"] * len(columns))
-    sql = f"INSERT INTO {table_name} ({', '.join(columns)}) VALUES ({placeholders})"
-
-    cursor.fast_executemany = True
-    total_rows = 0
-
-    for chunk in pd.read_csv(file_path, sep=sep, chunksize=chunksize):
-        chunk = chunk.replace({np.nan: None, "": None})
-        chunk = chunk[columns]
-
-        data = list(chunk.itertuples(index=False, name=None))
-
-        cursor.executemany(sql, data)
-        conn.commit()
-
-        total_rows += len(chunk)
-
-    print(f"Inserted {total_rows} rows into {table_name}")
-
-## Transactions_data ingestion
-load_csv_to_sql(
-    file_path=r"G:/Users/Quan/Downloads/Dataset-final-project/Dataset-final-project/transactions_data.csv",
-    table_name="transactions_data",
-    columns = [
-    "id",
-    "date",
-    "client_id",
-    "card_id",
-    "amount",
-    "use_chip",
-    "merchant_id",
-    "merchant_city",
-    "merchant_state",
-    "zip",
-    "mcc",
-    "errors"
-]
-)
-
-## Users_data ingestion
-load_csv_to_sql(
-    file_path=r"G:/Users/Quan/Downloads/Dataset-final-project/Dataset-final-project/users_data.csv",
-    table_name="users_data",
-    columns=[
-        "id",
-        "current_age",
-        "retirement_age",
-        "birth_year",
-        "birth_month",
-        "gender",
-        "address",
-        "latitude",
-        "longitude",
-        "per_capita_income",
-        "yearly_income",
-        "total_debt",
-        "credit_score",
-        "num_credit_cards",
-        "employment_status",
-        "education_level"
-    ]
-)
-
-## Cards_data ingestion
-load_csv_to_sql(
-    file_path=r"G:/Users/Quan/Downloads/Dataset-final-project/Dataset-final-project/cards_data.csv",
-    table_name="cards_data",
-    columns=[
-        "id",
-        "client_id",
-        "card_brand",
-        "card_type",
-        "card_number",
-        "expires",
-        "cvv",
-        "has_chip",
-        "num_cards_issued",
-        "credit_limit",
-        "acct_open_date",
-        "year_pin_last_changed",
-        "card_on_dark_web",
-        "issuer_bank_name",
-        "issuer_bank_state",
-        "issuer_bank_type",
-        "issuer_risk_rating"
-    ]
-)
-
-## Mcc_data ingestion
-load_csv_to_sql(
-    file_path=r"G:/Users/Quan/Downloads/Dataset-final-project/Dataset-final-project/mcc_data.csv",
-    table_name="mcc_data",
-    columns=[
-        "code",
-        "description",
-        "notes",
-        "updated_by"
-    ]
-)
-
-cursor.close()
+cursor.execute("""
+IF NOT EXISTS (SELECT * FROM sys.databases WHERE name = 'dwh')
+BEGIN
+    CREATE DATABASE [dwh]
+END""")
 conn.close()
 
-# ------------------------------------------------------------------------------------------
-# Useful functions to drop or truncate table for error fixing
-## Drop table function and code, uncomment server connection if needed
-conn = pyodbc.connect(
-    f'DRIVER={{ODBC Driver 17 for SQL Server}};SERVER={server};DATABASE={'dwh'};Trusted_Connection=yes;'
-)
+# STEP 2: CREATE SCHEMA & TABLE (Connect to DWH)
+print("Connecting to dwh...")
+# We add DATABASE=DWH here
+conn = pyodbc.connect(base_conn + "DATABASE=dwh;", autocommit=True)
 cursor = conn.cursor()
 
+# Create Schema
+print("Checking Schema 'ingestion'...")
+# Create the schema if it hasn't yet been created
+cursor.execute("""               
+IF NOT EXISTS (SELECT * FROM sys.schemas WHERE name = 'ingestion')
+BEGIN
+    EXEC('CREATE SCHEMA [ingestion]')
+END""")
 
-listed_table = ["transactions_data", "users_data", "cards_data", "mcc_data"]
+print("Checking Schema 'transformation'...")
+# Create the schema if it hasn't yet been created
+cursor.execute("""               
+IF NOT EXISTS (SELECT * FROM sys.schemas WHERE name = 'transformation')
+BEGIN
+    EXEC('CREATE SCHEMA [transformation]')
+END""")
 
-def drop_all_tables(cursor, table_list):
-    for table in table_list:
-        cursor.execute(f"DROP TABLE {table}")
-        print(f"Table {table} dropped.")
-    cursor.connection.commit()
+# Create Table
+print("Checking Table 'transactions_data'...")
+# Create the table if it hasn't yet been created and drop the old table
+# type = 'U' specifies the type of object we are looking for is a table
+# We don't drop the tables here since we assume the structure of the tables remain consistant.
+cursor.execute("""
+        IF NOT EXISTS (SELECT * FROM sys.objects WHERE object_id = OBJECT_ID('ingestion.transactions_data') AND type = 'U')
+        BEGIN
+            CREATE TABLE [ingestion].[transactions_data] (
+                id NVARCHAR(50),
+                date NVARCHAR(50),
+                client_id NVARCHAR(50),
+                card_id NVARCHAR(50), 
+                amount NVARCHAR(50), 
+                use_chip NVARCHAR(50),
+                merchant_id NVARCHAR(50), 
+                merchant_city NVARCHAR(50),
+                merchant_state NVARCHAR(50),
+                zip NVARCHAR(50),
+                mcc NVARCHAR(50),
+                errors NVARCHAR(50)
+            )   
+        END
+    """)
 
-drop_all_tables(cursor, listed_table)
+
+print("Checking Table 'users_data'...")
+cursor.execute("""
+        IF NOT EXISTS (SELECT * FROM sys.objects WHERE object_id = OBJECT_ID('ingestion.users_data') AND type = 'U')
+        BEGIN
+            CREATE TABLE [ingestion].[users_data] (
+                id NVARCHAR(50),
+                current_age NVARCHAR(50), 
+                retirement_age NVARCHAR(50), 
+                birth_year NVARCHAR(50),
+                birth_month NVARCHAR(50),
+                gender NVARCHAR(50),
+                address NVARCHAR(50),
+                latitude NVARCHAR(50),
+                longitude NVARCHAR(50), 
+                per_capita_income NVARCHAR(50),
+                yearly_income NVARCHAR(50),
+                total_debt NVARCHAR(50),
+                credit_score NVARCHAR(50),
+                num_credit_cards NVARCHAR(50),
+                employment_status NVARCHAR(50),
+                education_level NVARCHAR(50)
+            )
+        END
+    """)
 
 
+print("Checking Table 'cards_data'...")
+cursor.execute("""
+        IF NOT EXISTS (SELECT * FROM sys.objects WHERE object_id = OBJECT_ID('ingestion.cards_data') AND type = 'U')
+        BEGIN
+            CREATE TABLE [ingestion].[cards_data] (
+                id NVARCHAR(50),
+                client_id NVARCHAR(50),
+                card_brand NVARCHAR(50),
+                card_type NVARCHAR(50),
+                card_number NVARCHAR(50),
+                expires NVARCHAR(50),
+                cvv NVARCHAR(50),
+                has_chip NVARCHAR(50),
+                num_cards_issued NVARCHAR(50),
+                credit_limit NVARCHAR(50),
+                acct_open_date NVARCHAR(50),
+                year_pin_last_changed NVARCHAR(50),
+                card_on_dark_web NVARCHAR(50),
+                issuer_bank_name NVARCHAR(50),
+                issuer_bank_state NVARCHAR(50),
+                issuer_bank_type NVARCHAR(50),
+                issuer_risk_rating NVARCHAR(50)
+            )
+        END
+    """)
 
 
-## Truncate function just to remove all data from table if needed
-listed_table = ["transactions_data", "users_data", "cards_data", "mcc_data"]
+print("Checking Table 'mcc_data'...")
+cursor.execute("""
+        IF NOT EXISTS (SELECT * FROM sys.objects WHERE object_id = OBJECT_ID('ingestion.mcc_data') AND type = 'U')
+        BEGIN
+            CREATE TABLE [ingestion].[mcc_data] (
+                code NVARCHAR(50),
+                description NVARCHAR(50),
+                notes NVARCHAR(50),
+                updated_by NVARCHAR(50)
+            )
+        END
+    """)
 
-def truncate_all_tables(cursor, table_list):
-    for table in table_list:
-        cursor.execute(f"TRUNCATE TABLE {table}")
-        print(f"Table {table} truncated.")
-    cursor.connection.commit()
-    print("All tables truncated successfully!")
+print("\nEmpty Table Created")
+print("\nFinished")
 
-truncate_all_tables(cursor, listed_table)
-
-cursor.close()
 conn.close()
