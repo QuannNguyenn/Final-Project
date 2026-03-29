@@ -86,7 +86,7 @@ def clean_amount(col):
         word_numeric = s.where(remaining_mask).apply(try_word_to_num)
         result = result.fillna(word_numeric)
 
-    result = result.abs()
+    result = result
 
     # float output
     return result.astype(float)
@@ -338,4 +338,3 @@ finally:
     import os
     os.remove(temp_csv_path) 
     conn.close()
-
