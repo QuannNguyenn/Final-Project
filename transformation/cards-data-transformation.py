@@ -13,8 +13,6 @@ cursor = conn.cursor()
 cards_data_df = pd.read_sql("SELECT * FROM ingestion.cards_data", conn)
 
 # Looking for null in the table
-null_rows = cards_data_df[cards_data_df.isnull().any(axis=1)]
-print(null_rows.isnull().sum()[null_rows.isnull().sum() > 0]) 
 ## 2 columns cards_brand and card_type have null values
 
 # Only card_brand and card_type have null values, replace null values with "Not Available"
@@ -22,8 +20,6 @@ cards_data_df["card_brand"] = cards_data_df["card_brand"].fillna("Not Available"
 cards_data_df["card_type"] = cards_data_df["card_type"].fillna("Not Available")
 
 # Check again
-null_rows = cards_data_df[cards_data_df.isnull().any(axis=1)]
-print(null_rows.isnull().sum()[null_rows.isnull().sum() > 0]) 
 
 # Checking for inconsistency in formatting for text columns
 cards_data_df["card_brand"].unique()
