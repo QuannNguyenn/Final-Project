@@ -187,7 +187,7 @@ cursor.execute("""
     BEGIN
         CREATE TABLE [curated].[dim_date] (
             date_key INT PRIMARY KEY,
-            full_date DATE,
+            full_date DATETIME,
             year INT,
             month INT,
             day INT,
@@ -405,18 +405,18 @@ cursor.execute("""
 # =====================================================================================
 temp_csv_path = r"G:\temp_data_engineering\temp_cleaned_fact.csv"
 
-expected_fact_order = [
+# Ensure surrogate key columns are proper nullable integers first
+key_cols = [
     'transaction_key',
-    'id',
     'date_key',
     'user_key',
     'card_key',
     'mcc_key',
-    'merchant_key',
-    'amount',
-    'use_chip',
-    'errors'
+    'merchant_key'
 ]
+
+for col in key_cols:
+    transactions_df[col] = pd.to_numeric(transactions_df[col], errors='coerce').astype('Int64')
 
 print("Exporting cleaned data to temporary CSV...")
 transactions_df.to_csv(temp_csv_path, index=False, header=False, sep='|', encoding='utf-8')
