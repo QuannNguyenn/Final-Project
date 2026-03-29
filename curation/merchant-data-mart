@@ -151,6 +151,7 @@ cursor.execute("""
 """)
 
 print("Merchant mart created successfully in schema [merchant_marts].")
+conn.close()
 
 '''# Test queries in sql 
 ## Get the top performing merchants
