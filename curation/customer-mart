@@ -208,6 +208,7 @@ cursor.execute("""
 """)
 
 print("Customer analytics mart created successfully in schema [customer_marts].")
+conn.close()
 
 '''# Test queries in SQL
 
