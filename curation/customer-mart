@@ -1,0 +1,234 @@
+import pyodbc
+
+server = r'QUAN-CORNER\SQLEXPRESS02'
+conn_str = f'DRIVER={{ODBC Driver 17 for SQL Server}};SERVER={server};DATABASE=dwh;Trusted_Connection=yes;TrustServerCertificate=yes;'
+conn = pyodbc.connect(conn_str, autocommit=True)
+cursor = conn.cursor()
+
+# ----------------------------------------------------------------------------------------
+# CREATE MARTS SCHEMA IF NOT YET
+
+cursor.execute("""
+IF NOT EXISTS (SELECT * FROM sys.schemas WHERE name = 'customer_marts')
+BEGIN
+    EXEC('CREATE SCHEMA [customer_marts]')
+END
+""")
+
+# ----------------------------------------------------------------------------------------
+# DROP EXISTING MART TABLES
+
+print("Dropping marts tables to ensure there is no duplicated data")
+
+# Drop fact first due to FK dependencies
+cursor.execute("IF OBJECT_ID('customer_marts.fact_customer_transactions', 'U') IS NOT NULL DROP TABLE customer_marts.fact_customer_transactions")
+cursor.execute("IF OBJECT_ID('customer_marts.dim_cards', 'U') IS NOT NULL DROP TABLE customer_marts.dim_cards")
+cursor.execute("IF OBJECT_ID('customer_marts.dim_users', 'U') IS NOT NULL DROP TABLE customer_marts.dim_users")
+cursor.execute("IF OBJECT_ID('customer_marts.dim_merchant', 'U') IS NOT NULL DROP TABLE customer_marts.dim_merchant")
+cursor.execute("IF OBJECT_ID('customer_marts.dim_date', 'U') IS NOT NULL DROP TABLE customer_marts.dim_date")
+
+# ----------------------------------------------------------------------------------------
+# CREATE AND LOAD CUSTOMER_MARTS.DIM_DATE
+
+## Date dimension table: Keep all columns because customer behavior can also be analyzed by year, month, weekday, and weekend patterns.
+
+print("- Creating customer_marts.dim_date ...")
+cursor.execute("""
+    SELECT
+        date_key,
+        full_date,
+        [year],
+        [month],
+        [day],
+        day_of_week,
+        is_weekend
+    INTO customer_marts.dim_date
+    FROM curated.dim_date
+""")
+
+# ----------------------------------------------------------------------------------------
+# CREATE AND LOAD CUSTOMER_MARTS.DIM_USERS
+
+## User dimension table: Keep relevant customer profile variables to support customer segmentation, lifetime value analysis, and suspicious behavior analysis.
+
+print("- Creating customer_marts.dim_users ...")
+cursor.execute("""
+    SELECT
+        user_key,
+        id AS customer_id,
+        current_age,
+        retirement_age,
+        birth_year,
+        birth_month,
+        birth_month_name,
+        gender,
+        latitude,
+        longitude,
+        per_capita_income,
+        yearly_income,
+        total_debt,
+        credit_score,
+        num_credit_cards,
+        employment_status,
+        education_level
+    INTO customer_marts.dim_users
+    FROM curated.dim_users
+""")
+
+# ----------------------------------------------------------------------------------------
+# CREATE AND LOAD CUSTOMER_MARTS.DIM_CARDS
+
+## Cards dimension table: Keep relevant card fields because one of the business questions is how many active cards a typical customer has.
+
+print("- Creating customer_marts.dim_cards ...")
+cursor.execute("""
+    SELECT
+        card_key,
+        id AS card_id,
+        user_key,
+        card_brand,
+        card_type,
+        expires,
+        has_chip,
+        num_cards_issued,
+        credit_limit,
+        acct_open_date,
+        year_pin_last_changed,
+        card_on_dark_web,
+        issuer_bank_name,
+        issuer_bank_state,
+        issuer_bank_type,
+        issuer_risk_rating
+    INTO customer_marts.dim_cards
+    FROM curated.dim_cards
+""")
+
+# ----------------------------------------------------------------------------------------
+# CREATE AND LOAD CUSTOMER_MARTS.DIM_MERCHANT
+
+## Merchant dimension table: Keep merchant information because it helps analyze online vs in-store behavior.
+## We create transaction_channel so the team can directly compare customer online and in-store spending patterns.
+
+print("- Creating customer_marts.dim_merchant ...")
+cursor.execute("""
+    SELECT
+        merchant_key,
+        merchant_id,
+        merchant_city,
+        merchant_state,
+        zip,
+        in_US,
+        CASE
+            WHEN LOWER(LTRIM(RTRIM(merchant_city))) = 'online' THEN 'Online'
+            ELSE 'In-Store'
+        END AS transaction_channel
+    INTO customer_marts.dim_merchant
+    FROM curated.dim_merchant
+""")
+
+# ----------------------------------------------------------------------------------------
+# CREATE CUSTOMER MART FACT TABLE
+
+## Transaction fact table: Transaction key, transaction id, date_key, user_key, card_key, merchant_key, amount, errors, is_error
+## Amount is needed for lifetime value, while errors and is_error help identify suspicious transaction patterns.
+
+print("- Creating customer_marts.fact_customer_transactions ...")
+cursor.execute("""
+    SELECT
+        transaction_key,
+        id AS transaction_id,
+        date_key,
+        user_key,
+        card_key,
+        merchant_key,
+        amount,
+        errors,
+        is_error
+    INTO customer_marts.fact_customer_transactions
+    FROM curated.fact_transactions
+""")
+
+# ----------------------------------------------------------------------------------------
+# ADD PRIMARY KEYS
+
+print("Finalizing Customer Mart structure (Setting Keys)...")
+
+cursor.execute("""
+    ALTER TABLE customer_marts.dim_date
+    ADD CONSTRAINT PK_CUSTOMER_MART_DATE PRIMARY KEY (date_key)
+""")
+
+cursor.execute("""
+    ALTER TABLE customer_marts.dim_users
+    ADD CONSTRAINT PK_CUSTOMER_MART_USER PRIMARY KEY (user_key)
+""")
+
+cursor.execute("""
+    ALTER TABLE customer_marts.dim_cards
+    ADD CONSTRAINT PK_CUSTOMER_MART_CARD PRIMARY KEY (card_key)
+""")
+
+cursor.execute("""
+    ALTER TABLE customer_marts.dim_merchant
+    ADD CONSTRAINT PK_CUSTOMER_MART_MERCHANT PRIMARY KEY (merchant_key)
+""")
+
+cursor.execute("""
+    ALTER TABLE customer_marts.fact_customer_transactions
+    ADD CONSTRAINT PK_CUSTOMER_MART_FACT PRIMARY KEY (transaction_key)
+""")
+
+# ----------------------------------------------------------------------------------------
+# ADD FOREIGN KEYS
+
+## This tells SQL how the tables relate to each other.
+
+cursor.execute("""
+    ALTER TABLE customer_marts.fact_customer_transactions
+    ADD CONSTRAINT FK_CUSTOMER_MART_DATE FOREIGN KEY (date_key)
+    REFERENCES customer_marts.dim_date(date_key)
+""")
+
+cursor.execute("""
+    ALTER TABLE customer_marts.fact_customer_transactions
+    ADD CONSTRAINT FK_CUSTOMER_MART_USER FOREIGN KEY (user_key)
+    REFERENCES customer_marts.dim_users(user_key)
+""")
+
+cursor.execute("""
+    ALTER TABLE customer_marts.fact_customer_transactions
+    ADD CONSTRAINT FK_CUSTOMER_MART_CARD FOREIGN KEY (card_key)
+    REFERENCES customer_marts.dim_cards(card_key)
+""")
+
+cursor.execute("""
+    ALTER TABLE customer_marts.fact_customer_transactions
+    ADD CONSTRAINT FK_CUSTOMER_MART_MERCHANT FOREIGN KEY (merchant_key)
+    REFERENCES customer_marts.dim_merchant(merchant_key)
+""")
+
+print("Customer analytics mart created successfully in schema [customer_marts].")
+
+'''# Test queries in SQL
+
+## 1. Lifetime value of each customer
+SELECT
+    u.customer_id,
+    SUM(f.amount) AS lifetime_value
+FROM customer_marts.fact_customer_transactions f
+JOIN customer_marts.dim_users u
+    ON f.user_key = u.user_key
+GROUP BY u.customer_id
+ORDER BY lifetime_value DESC;
+
+## 2. Online vs in-store behavior
+SELECT
+    m.transaction_channel,
+    COUNT(*) AS total_transactions,
+    SUM(f.amount) AS total_spending,
+    AVG(f.amount) AS avg_transaction_value
+FROM customer_marts.fact_customer_transactions f
+JOIN customer_marts.dim_merchant m
+    ON f.merchant_key = m.merchant_key
+GROUP BY m.transaction_channel;
+'''
