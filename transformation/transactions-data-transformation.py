@@ -14,38 +14,20 @@ cursor = conn.cursor()
 # importing as pandas df from sql server
 transactions_data_df = pd.read_sql( "SELECT * FROM ingestion.transactions_data", conn)
 
-# transactions_data_df.head(10)
-# len(transactions_data_df)
+
 # # -----------------------------------------------------------------------------------------------------------
 # # Transformation for numeric columns
 # ## Id
-# duplicates = (
-#     transactions_data_df[transactions_data_df["id"].duplicated(keep=False)]
-#     .sort_values("id")
-# )
-
-# print(duplicates)
 # ### No id duplicates to deal with. Id can be left as it is
 
 # ## date 
-# nulls = (
-#     transactions_data_df[transactions_data_df["date"].isna()]
-# )
-# print(nulls)
 # ### the date column is in the correct formatting and there are no missing values, it can also be left as is
 
 # ## client_id
-# nulls = (
-#     transactions_data_df[transactions_data_df["client_id"].isna()]
-# )
-# print(nulls)
 # ### client_id have no missing value and is in the correct data format, we can leave it as is
 
 # ## card_id
 # nulls = (
-#     transactions_data_df[transactions_data_df["card_id"].isna()]
-# )
-# print(nulls)
 ### card_id have no missing value and is in the correct data format, we can leave it as is
 
 ## amount
@@ -92,24 +74,12 @@ def clean_amount(col):
     return result.astype(float)
 
 transactions_data_df["amount"] = clean_amount(transactions_data_df["amount"])
-transactions_data_df["amount"].head(100)
 
 
 ## merchant_id
-# nulls = (
-#     transactions_data_df[transactions_data_df["merchant_id"].isna()]
-# )
-# print(nulls)
 # ### merchant_id have no missing value and is in the correct data format, we can leave it as is
 
 ## merchant_city
-# transactions_data_df["merchant_city"].unique()
-
-# nulls = (
-#     transactions_data_df[transactions_data_df["merchant_city"].isna()]
-# )
-# print(nulls)
-
 ### Merchant city does not have missing values, though to make the data format consistent, we can set that every word to only have the first letter capitalized and also filter possible leading or extra spaces 
 ### This cleaning should convert things like ONLINE to Online to make it consistent as well
 def clean_city(col):
@@ -127,7 +97,6 @@ transactions_data_df["merchant_city"].head(100) # Check
 ## merchant_state
 ### merchant_state have missing values, for those cases, it is logical to make the missing rows as "Not Available"
 ### States are written as state code, we need to check if that is consistent
-# transactions_data_df["merchant_state"].unique()
 
 ### Aside from US states, we have other countries that are written in full. To make it consistent, we can map the statecodes into full state name, and also create a new column for data enrichment to easily filter rows
 ### that are inside or outside the U.S
@@ -232,10 +201,6 @@ transactions_data_df.head(100) # Check
 
 
 ## Zip
-# nulls = (
-#     transactions_data_df[transactions_data_df["zip"].isna()]
-# )
-# print(nulls[:10])
 ### For null values in zip, we can make it as not available as it can be useful for analytical processes (looking into transaction details of unknown origins)
 transactions_data_df["zip"] = (
     pd.to_numeric(transactions_data_df["zip"], errors="coerce")
@@ -250,10 +215,6 @@ transactions_data_df["zip"] = transactions_data_df["zip"].fillna("Not Available"
 transactions_data_df.head(100)
 
 ## Mcc 
-nulls = (
-    transactions_data_df[transactions_data_df["mcc"].isna()]
-)
-print(nulls[:10])
 ### There are null values for the mcc code, and its formatting is correct so it is fine to leave as is
 
 ## Used chip
