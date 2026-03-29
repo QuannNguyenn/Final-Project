@@ -277,12 +277,6 @@ transactions_data_df.head(100)
 
 len(transactions_data_df)
 
-# Ensure 'amount' doesn't have pd.NA
-transactions_data_df["amount"] = transactions_data_df["amount"].astype(object).where(transactions_data_df["amount"].notnull(), None)
-
-# Ensure 'mcc' (which you left as is) doesn't have hidden NaNs from the SQL read
-transactions_data_df["mcc"] = transactions_data_df["mcc"].astype(object).where(transactions_data_df["mcc"].notnull(), None)
-
 #---------------------------------------------------------------------------------------------------------------
 # Create table for insertion (Uncomment to create table if haven't)
 cursor.execute("""
@@ -338,4 +332,3 @@ finally:
     import os
     os.remove(temp_csv_path) 
     conn.close()
-
