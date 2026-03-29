@@ -196,7 +196,6 @@ transactions_data_df["merchant_state"], transactions_data_df["in_US"] = clean_st
     transactions_data_df["merchant_state"]
 )
 
-transactions_data_df.head(100) # Check
 
 
 
@@ -211,8 +210,6 @@ transactions_data_df["zip"] = (
 )
 
 transactions_data_df["zip"] = transactions_data_df["zip"].fillna("Not Available")
-
-transactions_data_df.head(100)
 
 ## Mcc 
 ### There are null values for the mcc code, and its formatting is correct so it is fine to leave as is
@@ -233,15 +230,11 @@ transactions_data_df["errors"] = (
     .fillna("No Errors")
 )
 
-transactions_data_df["errors"].unique() # Check
 
 transactions_data_df["is_error"] = (
     transactions_data_df["errors"] != "No Errors"
 ).astype(str) # Creating an error flag that will be very helpful in fast and reliable querying over error vs non-error transactions
 
-transactions_data_df.head(100)
-
-len(transactions_data_df)
 
 #---------------------------------------------------------------------------------------------------------------
 # Create table for insertion (Uncomment to create table if haven't)
