@@ -392,7 +392,7 @@ cursor.execute("""
             amount FLOAT,
             use_chip VARCHAR(50),
             errors VARCHAR(255),
-            is_error INT,
+            is_error VARCHAR(20),
             CONSTRAINT FK_DATE_TABLE FOREIGN KEY (date_key) REFERENCES curated.dim_date(date_key),
             CONSTRAINT FK_MCC_TABLE FOREIGN KEY (mcc_key) REFERENCES curated.dim_mcc(mcc_key),
             CONSTRAINT FK_CARD_TABLE FOREIGN KEY (card_key) REFERENCES curated.dim_cards(card_key),
@@ -414,8 +414,7 @@ key_cols = [
     'user_key',
     'card_key',
     'mcc_key',
-    'merchant_key',
-    'is_error'
+    'merchant_key'
 ]
 
 for col in key_cols:
