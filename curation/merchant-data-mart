@@ -1,56 +1,9 @@
 import pyodbc
-import pandas as pd
 
 server = r'QUAN-CORNER\SQLEXPRESS02'
 conn_str = f'DRIVER={{ODBC Driver 17 for SQL Server}};SERVER={server};DATABASE=dwh;Trusted_Connection=yes;TrustServerCertificate=yes;'
 conn = pyodbc.connect(conn_str, autocommit=True)
 cursor = conn.cursor()
-# Loading the curated layer 
-## Transaction fact
-transactions_data_curated = pd.read_sql( "SELECT * FROM curated.fact_transactions", conn)
-transactions_data_curated["is_error"] = transactions_data_curated["is_error"].astype(str).str.strip()
-
-## Date dimension
-date_dim_curated = pd.read_sql( "SELECT * FROM curated.dim_date", conn)
-
-## Merchant dimension
-merchant_dim_curated = pd.read_sql( "SELECT * FROM curated.dim_merchant", conn)
-
-## Nerchant category dimension
-mcc_dim_curated = pd.read_sql( "SELECT * FROM curated.dim_mcc", conn)
-
-
-# Creating the transaction fact table with the relevant information only
-## Transaction fact table: Transaction key, transaction id, date_key, mcc_key (merchant_category), merchant_key, amount, use_chip(payment_method), errors, is_error
-## Amount is obviously for aggregation of revenue, use_chip can be useful for merchant analysis in determining things such as what kind of payment method is the most popular for a specific merchant.
-fact_transactions = transactions_data_curated[[
-    "transaction_key",
-    "id",                 # transaction_id
-    "date_key",
-    "mcc_key",
-    "merchant_key",
-    "amount",
-    "use_chip",
-    "errors",
-    "is_error"
-]].copy()
-
-fact_transactions = fact_transactions.rename(columns={
-    "id": "transaction_id",
-    "mcc_key": "merchant_category_key",
-    "use_chip": "payment_method"
-})
-
-
-## Creating the dimension tables with relevant information only
-## Date dimension table: Keep all as the specific month, day, or year can be used to perform fast query of merchant performance for a specific year, or day of a month, and full_date is useful in the case that they want to query between date ranges.
-
-## Merchant key  dimension table: Also keep all of the columns since one of the main objective is to see how revenue is distributed geographically between merchants. The merchant dimension have information on the merchant's city, state, zipcode, as well
-## as the helper in_US would allow the department to see the sale distribution by these geographical characteristics. 
-
-## Merchant category dimension table: Keep as the table will provide revenue information on different merchant category to identify high performing categories to focus on. However, we can drop the "notes" and the "updated_by" columns as they
-## do not bring analytical value to the department's use case. 
-mcc_dim_curated = mcc_dim_curated.drop(columns=["notes", "updated_by"])
 
 
 #----------------------------------------------------------------------------------------
@@ -62,200 +15,140 @@ BEGIN
     EXEC('CREATE SCHEMA [merchant_marts]')
 END
 """)
-conn.commit()
 
 #----------------------------------------------------------------------------------------
 # DROP EXISTING MART TABLES
 
-print("Dropping marts tables to ensure a fresh start...")
+print("Dropping marts tables to ensure there is no duplicated data")
 
+# Drop fact first due to FK dependencies
 cursor.execute("IF OBJECT_ID('merchant_marts.fact_transactions', 'U') IS NOT NULL DROP TABLE merchant_marts.fact_transactions")
 cursor.execute("IF OBJECT_ID('merchant_marts.dim_mcc', 'U') IS NOT NULL DROP TABLE merchant_marts.dim_mcc")
 cursor.execute("IF OBJECT_ID('merchant_marts.dim_merchant', 'U') IS NOT NULL DROP TABLE merchant_marts.dim_merchant")
 cursor.execute("IF OBJECT_ID('merchant_marts.dim_date', 'U') IS NOT NULL DROP TABLE merchant_marts.dim_date")
-conn.commit()
 
 #----------------------------------------------------------------------------------------
 # CREATE AND LOAD MARTS.DIM_DATE
+## Date dimension table: Keep all as the specific month, day, or year can be used to perform fast query of merchant performance for a specific year, or day of a month, and full_date is useful in the case that they want to query between date ranges.
 
+print("- Creating merchant_marts.dim_date ...")
 cursor.execute("""
-    IF NOT EXISTS (SELECT * FROM sys.objects WHERE object_id = OBJECT_ID('merchant_marts.dim_date') AND type = 'U')
-    BEGIN
-        CREATE TABLE [merchant_marts].[dim_date] (
-            date_key INT PRIMARY KEY,
-            full_date DATETIME,
-            year INT,
-            month INT,
-            day INT,
-            day_of_week VARCHAR(20),
-            is_weekend VARCHAR(10)
-        )
-    END
+    SELECT
+        date_key,
+        full_date,
+        [year],
+        [month],
+        [day],
+        day_of_week,
+        is_weekend
+    INTO merchant_marts.dim_date
+    FROM curated.dim_date
 """)
-
-data_list = [
-    tuple(None if pd.isna(val) else val for val in row)
-    for row in date_dim_curated.itertuples(index=False, name=None)
-]
-
-insert_query = """
-    INSERT INTO merchant_marts.dim_date
-    (date_key, full_date, year, month, day, day_of_week, is_weekend)
-    VALUES (?, ?, ?, ?, ?, ?, ?)
-"""
-
-cursor.fast_executemany = True
-print(f"Loading {len(data_list)} rows into merchant_marts.dim_date...")
-cursor.executemany(insert_query, data_list)
-conn.commit()
-print("merchant_marts.dim_date Success!")
 
 #----------------------------------------------------------------------------------------
 # CREATE AND LOAD MARTS.DIM_MERCHANT
 
+## Merchant key  dimension table: Also keep all of the columns since one of the main objective is to see how revenue is distributed geographically between merchants. The merchant dimension have information on the merchant's city, state, zipcode, as well
+## as the helper in_US would allow the department to see the sale distribution by these geographical characteristics. 
+
+print("- Creating merchant_marts.dim_merchant ...")
 cursor.execute("""
-    IF NOT EXISTS (SELECT * FROM sys.objects WHERE object_id = OBJECT_ID('merchant_marts.dim_merchant') AND type = 'U')
-    BEGIN
-        CREATE TABLE [merchant_marts].[dim_merchant] (
-            merchant_key INT PRIMARY KEY,
-            merchant_id INT,
-            merchant_city VARCHAR(100),
-            merchant_state VARCHAR(100),
-            zip VARCHAR(20),
-            in_US VARCHAR(20)
-        )
-    END
+    SELECT
+        merchant_key,
+        merchant_id,
+        merchant_city,
+        merchant_state,
+        zip,
+        in_US
+    INTO merchant_marts.dim_merchant
+    FROM curated.dim_merchant
 """)
-
-data_list = [
-    tuple(None if pd.isna(val) else val for val in row)
-    for row in merchant_dim_curated.itertuples(index=False, name=None)
-]
-
-insert_query = """
-    INSERT INTO merchant_marts.dim_merchant
-    (merchant_key, merchant_id, merchant_city, merchant_state, zip, in_US)
-    VALUES (?, ?, ?, ?, ?, ?)
-"""
-
-cursor.fast_executemany = True
-print(f"Loading {len(data_list)} rows into merchant_marts.dim_merchant...")
-cursor.executemany(insert_query, data_list)
-conn.commit()
-print("merchant_marts.dim_merchant Success!")
 
 #----------------------------------------------------------------------------------------
 # CREATE AND LOAD MARTS.DIM_MCC
 
+## Merchant category dimension table: Keep as the table will provide revenue information on different merchant category to identify high performing categories to focus on. However, we can drop the "notes" and the "updated_by" columns as they
+## do not bring analytical value to the department's use case. 
+
+print("- Creating merchant_marts.dim_mcc ...")
 cursor.execute("""
-    IF NOT EXISTS (SELECT * FROM sys.objects WHERE object_id = OBJECT_ID('merchant_marts.dim_mcc') AND type = 'U')
-    BEGIN
-        CREATE TABLE [merchant_marts].[dim_mcc] (
-            mcc_key INT PRIMARY KEY,
-            code INT,
-            description VARCHAR(255)
-        )
-    END
+    SELECT
+        mcc_key,
+        code,
+        description
+    INTO merchant_marts.dim_mcc
+    FROM curated.dim_mcc
 """)
-
-data_list = [
-    tuple(None if pd.isna(val) else val for val in row)
-    for row in mcc_dim_curated[['mcc_key', 'code', 'description']].itertuples(index=False, name=None)
-]
-
-insert_query = """
-    INSERT INTO merchant_marts.dim_mcc
-    (mcc_key, code, description)
-    VALUES (?, ?, ?)
-"""
-
-cursor.fast_executemany = True
-print(f"Loading {len(data_list)} rows into merchant_marts.dim_mcc...")
-cursor.executemany(insert_query, data_list)
-conn.commit()
-print("merchant_marts.dim_mcc Success!")
 
 #----------------------------------------------------------------------------------------
 # CREATE MART FACT TABLE
 
+## Transaction fact table: Transaction key, transaction id, date_key, mcc_key (merchant_category), merchant_key, amount, use_chip(payment_method), errors, is_error
+## Amount is obviously for aggregation of revenue, use_chip can be useful for merchant analysis in determining things such as what kind of payment method is the most popular for a specific merchant.
+
+print("- Creating merchant_marts.fact_transactions ...")
 cursor.execute("""
-    IF NOT EXISTS (SELECT * FROM sys.objects WHERE object_id = OBJECT_ID('merchant_marts.fact_transactions') AND type = 'U')
-    BEGIN
-        CREATE TABLE [merchant_marts].[fact_transactions] (
-            transaction_key INT PRIMARY KEY,
-            transaction_id INT,
-            date_key INT,
-            merchant_category_key INT,
-            merchant_key INT,
-            amount FLOAT,
-            payment_method VARCHAR(100),
-            errors VARCHAR(255),
-            is_error VARCHAR(20),
-            CONSTRAINT FK_MART_DATE FOREIGN KEY (date_key) REFERENCES merchant_marts.dim_date(date_key),
-            CONSTRAINT FK_MART_MCC FOREIGN KEY (merchant_category_key) REFERENCES merchant_marts.dim_mcc(mcc_key),
-            CONSTRAINT FK_MART_MERCHANT FOREIGN KEY (merchant_key) REFERENCES merchant_marts.dim_merchant(merchant_key)
-        )
-    END
+    SELECT
+        transaction_key,
+        id AS transaction_id,
+        date_key,
+        mcc_key AS merchant_category_key,
+        merchant_key,
+        amount,
+        use_chip AS payment_method,
+        errors,
+        is_error
+    INTO merchant_marts.fact_transactions
+    FROM curated.fact_transactions
 """)
-conn.commit()
 
 #----------------------------------------------------------------------------------------
-# LOAD MART FACT TABLE
+# ADD PRIMARY KEYS
 
-temp_csv_path = r"G:\temp_data_engineering\temp_mart_fact_transactions.csv"
+print("Finalizing Merchant Mart structure (Setting Keys)...")
 
-# Ensure numeric columns are proper nullable integers
-fact_transactions["transaction_key"] = pd.to_numeric(
-    fact_transactions["transaction_key"], errors="coerce"
-).astype("Int64")
+cursor.execute("""
+    ALTER TABLE merchant_marts.dim_date
+    ADD CONSTRAINT PK_MART_DATE PRIMARY KEY (date_key)
+""")
 
-fact_transactions["transaction_id"] = pd.to_numeric(
-    fact_transactions["transaction_id"], errors="coerce"
-).astype("Int64")
+cursor.execute("""
+    ALTER TABLE merchant_marts.dim_merchant
+    ADD CONSTRAINT PK_MART_MERCHANT PRIMARY KEY (merchant_key)
+""")
 
-fact_transactions["date_key"] = pd.to_numeric(
-    fact_transactions["date_key"], errors="coerce"
-).astype("Int64")
+cursor.execute("""
+    ALTER TABLE merchant_marts.dim_mcc
+    ADD CONSTRAINT PK_MART_MCC PRIMARY KEY (mcc_key)
+""")
 
-fact_transactions["merchant_category_key"] = pd.to_numeric(
-    fact_transactions["merchant_category_key"], errors="coerce"
-).astype("Int64")
+cursor.execute("""
+    ALTER TABLE merchant_marts.fact_transactions
+    ADD CONSTRAINT PK_MART_FACT PRIMARY KEY (transaction_key)
+""")
 
-fact_transactions["merchant_key"] = pd.to_numeric(
-    fact_transactions["merchant_key"], errors="coerce"
-).astype("Int64")
+#----------------------------------------------------------------------------------------
+# ADD FOREIGN KEYS
 
+## This tells SQL how the tables relate to each other.
 
-print("Exporting mart fact table to temporary CSV...")
-fact_transactions.to_csv(
-    temp_csv_path,
-    index=False,
-    header=False,
-    sep='|',
-    encoding='utf-8'
-)
-print("Export complete.")
+cursor.execute("""
+    ALTER TABLE merchant_marts.fact_transactions
+    ADD CONSTRAINT FK_MART_DATE FOREIGN KEY (date_key)
+    REFERENCES merchant_marts.dim_date(date_key)
+""")
 
-bulk_insert_query = f"""
-BULK INSERT merchant_marts.fact_transactions
-FROM '{temp_csv_path}'
-WITH (
-    FIELDTERMINATOR = '|',
-    ROWTERMINATOR = '0x0a',
-    TABLOCK
-);
-"""
+cursor.execute("""
+    ALTER TABLE merchant_marts.fact_transactions
+    ADD CONSTRAINT FK_MART_MCC FOREIGN KEY (merchant_category_key)
+    REFERENCES merchant_marts.dim_mcc(mcc_key)
+""")
 
-try:
-    print("Starting marts.fact_transactions bulk insert...")
-    cursor.execute(bulk_insert_query)
-    conn.commit()
-    print("merchant_marts.fact_transactions Success!")
-except Exception as e:
-    print(f"Bulk Insert Failed: {e}")
-finally:
-    import os
-    os.remove(temp_csv_path)
+cursor.execute("""
+    ALTER TABLE merchant_marts.fact_transactions
+    ADD CONSTRAINT FK_MART_MERCHANT FOREIGN KEY (merchant_key)
+    REFERENCES merchant_marts.dim_merchant(merchant_key)
+""")
 
 print("Merchant mart created successfully in schema [merchant_marts].")
 
