@@ -273,6 +273,11 @@ transactions_data_df["errors"] = (
 )
 
 transactions_data_df["errors"].unique() # Check
+
+transactions_data_df["is_error"] = (
+    transactions_data_df["errors"] != "No Errors"
+).astype(int) # Creating an error flag that will be very helpful in fast and reliable querying over error vs non-error transactions
+
 transactions_data_df.head(100)
 
 len(transactions_data_df)
@@ -295,7 +300,8 @@ cursor.execute("""
                 zip VARCHAR(50),
                 mcc INT,
                 errors VARCHAR(255),
-                in_US VARCHAR(20)
+                in_US VARCHAR(20),
+                is_error INT
                 )
             END 
 """)
@@ -332,3 +338,4 @@ finally:
     import os
     os.remove(temp_csv_path) 
     conn.close()
+
